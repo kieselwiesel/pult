@@ -186,6 +186,8 @@ table.grades thead th.grp-final  { background: var(--accent-soft); color: var(--
 td.sonst-cell { background: #fdf8ee; cursor: pointer; }
 td.sonst-cell:hover .cell { outline: 2px solid var(--amber); outline-offset: -2px; }
 td.sonst-cell .cell { min-width: 46px; height: 46px; display:flex; align-items:center; justify-content:center; font-weight:600; }
+th.zw-head { cursor: pointer; }
+th.zw-head:hover { background: #e3e7ec !important; }
 td.prev-cell { background: #f3f5f7; }
 td.prev-cell .cell { min-width: 54px; height: 46px; display:flex; align-items:center; justify-content:center; font-weight:650; color: var(--ink-soft); }
 
@@ -196,7 +198,8 @@ th.col-name, td.col-name {
   border-right: 2px solid var(--line);
 }
 table.grades thead th.col-name { z-index: 4; background: #f7f8fa; }
-td.col-name .sname { display:block; padding: 10px 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+td.col-name .sname { display:block; padding: 10px 12px 2px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+td.col-name .spark { padding: 0 12px 8px; opacity: .8; }
 td.col-name .sname small { color: var(--ink-faint); font-weight: 500; }
 tr.inactive td.col-name .sname { color: var(--ink-faint); font-style: italic; }
 
@@ -244,6 +247,24 @@ th.colhead .ch-date { display:block; font-size: 11px; color: var(--ink-faint); f
 
 .empty-state { text-align: center; padding: 48px 20px; color: var(--ink-soft); }
 .empty-state .big { font-size: 40px; margin-bottom: 8px; opacity: .5; }
+
+/* Schülername als Link in der Tabelle */
+.sname-link { cursor: pointer; }
+.sname-link:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+
+/* Schüler-Detailseite */
+.sd-chip { display:inline-flex; align-items:center; justify-content:center; min-width: 34px; padding: 2px 8px; border-radius: var(--radius); font-weight: 700; font-variant-numeric: tabular-nums; }
+.sd-grade, .sd-sonst { cursor: pointer; }
+.sd-grade:hover, .sd-sonst:hover { background: var(--accent-soft); }
+.sd-sonst { background: #fdf8ee; }
+
+/* Simulator */
+.sim-out { margin-top: 14px; padding: 12px 14px; border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: var(--radius); background: #fafbfc; font-size: 15px; }
+.sim-out.good { border-left-color: var(--g-top); background: var(--g-good); color: var(--g-good-fg); }
+.sim-out.bad { border-left-color: var(--g-fail); background: var(--g-low); color: var(--g-low-fg); }
+.sim-status { font-weight: 600; }
+.sim-status.good { color: var(--g-top); }
+.sim-status.bad { color: var(--g-fail); }
 
 /* ---------- Klassenarbeit-Editor ---------- */
 th.ka-task .ch-max { display:block; font-size: 11px; color: var(--ink-faint); font-weight: 500; }

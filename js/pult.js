@@ -16,6 +16,7 @@ const DEFAULT_DATA = () => ({
     ferienDatum: '',
     ferienLabel: 'Ferien',
     zeugnisDatum: '',
+    lastBackup: '',      // ISO-Datum des letzten JSON-Backups
   },
   courses: [],
   grades: {},          // grades[studentId][columnId] = punkte(0..15)
@@ -132,6 +133,7 @@ function newCourse(subject, className) {
   return {
     id: uid(),
     subject, className,
+    scale: 'punkte',                  // 'punkte' (0–15) | 'noten' (1–6 mit Tendenz)
     weightWritten: 40, weightOral: 60,
     weightHY1: 30, weightHY2: 70,     // Endjahresnote
     students: [],
@@ -158,6 +160,28 @@ function noteFromPoints(pts) {
   const p = Math.round(pts);
   return p >= 13 ? 1 : p >= 10 ? 2 : p >= 7 ? 3 : p >= 4 ? 4 : p >= 1 ? 5 : 6;
 }
+/* Punkte -> kontinuierliche Kommanote (1,0–6,0) für Durchschnitte im 1–6-Modus */
+function pointsToNoteDecimal(pts) {
+  if (pts == null || isNaN(pts)) return null;
+  return clamp((17 - pts) / 3, 1, 6);
+}
+/* Skalenabhängige Anzeige eines Punktwerts.
+   scale: 'punkte' | 'noten'; avg=true → Kommawert, sonst diskrete Note/Punkt. */
+function fmtGrade(pts, scale, avg) {
+  if (pts == null || isNaN(pts)) return '–';
+  if (scale === 'noten') return avg ? fmtNum(pointsToNoteDecimal(pts)) : (NOTE_MAP[clamp(Math.round(pts), 0, 15)] ?? '–');
+  return avg ? fmtNum(pts) : String(Math.round(pts));
+}
+/* <option>-Liste für manuelle Note-Auswahl (Wert = Punkte 0–15) */
+function manualOptions(scale, current) {
+  let out = `<option value="">— berechnet verwenden —</option>`;
+  for (let p = 15; p >= 0; p--) {
+    const lbl = scale === 'noten' ? `${NOTE_MAP[p]}  (${p} P.)` : `${p} Pkt  ·  ${NOTE_MAP[p]}`;
+    out += `<option value="${p}" ${current === p ? 'selected' : ''}>${lbl}</option>`;
+  }
+  return out;
+}
+function scaleName(scale) { return scale === 'noten' ? 'Noten 1–6' : 'Punkte 0–15'; }
 function gradeColor(pts) {
   if (pts == null || isNaN(pts)) return { bg: 'transparent', fg: 'var(--line)' };
   const p = Math.round(pts);
@@ -247,6 +271,92 @@ function courseMean(course) {
   return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
 }
 
+/* ---------- Verlauf / Trend / Simulation ---------- */
+/* benotete Leistungen in Reihenfolge (optional halbjahrübergreifend) */
+function gradeSeries(course, sId, hyKeys) {
+  const out = [];
+  (hyKeys || ['1', '2']).forEach(hyKey => {
+    course.halfYears[hyKey].columns.forEach(col => {
+      const v = (data.grades[sId] || {})[col.id];
+      if (v != null && !isNaN(v)) out.push({ hy: hyKey, type: col.type, value: v, label: col.label, date: col.date });
+    });
+  });
+  return out;
+}
+/* Tendenz: erste vs. letzte Hälfte der benoteten Leistungen im Halbjahr */
+function trendDir(course, hyKey, sId) {
+  const vals = gradeSeries(course, sId, [hyKey]).map(p => p.value);
+  if (vals.length < 3) return null;
+  const half = Math.floor(vals.length / 2);
+  const m = a => a.reduce((x, y) => x + y, 0) / a.length;
+  const d = m(vals.slice(vals.length - half)) - m(vals.slice(0, half));
+  return d >= 1 ? 'up' : d <= -1 ? 'down' : null;
+}
+function trendArrowSvg(dir) {
+  if (!dir) return '';
+  const up = dir === 'up';
+  const color = up ? 'var(--g-top)' : 'var(--g-fail)';
+  const path = up ? 'M2 10 L10 2 M6 2 L10 2 L10 6' : 'M2 2 L10 10 M6 10 L10 10 L10 6';
+  return `<svg width="12" height="12" viewBox="0 0 12 12" style="vertical-align:middle;margin-left:3px"><path d="${path}" stroke="${color}" stroke-width="1.7" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+}
+function sparkSvg(values) {
+  const n = values.length; if (n < 2) return '';
+  const W = 74, H = 20, p = 2;
+  const x = i => p + i * (W - 2 * p) / (n - 1);
+  const y = v => p + (15 - v) / 15 * (H - 2 * p);
+  const pts = values.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+  return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="display:block"><polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="1.3"/></svg>`;
+}
+function verlaufSvg(series, scale) {
+  const n = series.length;
+  if (n < 2) return `<div class="cs-sub">Zu wenige benotete Leistungen für einen Verlauf.</div>`;
+  const W = 620, H = 200, padL = 34, padR = 12, padT = 12, padB = 26;
+  const x = i => padL + i * (W - padL - padR) / (n - 1);
+  const y = v => padT + (15 - v) / 15 * (H - padT - padB);
+  const ticks = [15, 12, 9, 6, 3, 0];
+  const grid = ticks.map(v => `<line x1="${padL}" y1="${y(v).toFixed(1)}" x2="${W-padR}" y2="${y(v).toFixed(1)}" stroke="var(--line-soft)"/>
+    <text x="${padL-6}" y="${(y(v)+3).toFixed(1)}" text-anchor="end" font-size="9" fill="var(--ink-faint)">${fmtGrade(v, scale, false)}</text>`).join('');
+  let boundary = '';
+  const bIdx = series.findIndex(p => p.hy === '2');
+  if (bIdx > 0) {
+    const bx = ((x(bIdx) + x(bIdx - 1)) / 2).toFixed(1);
+    boundary = `<line x1="${bx}" y1="${padT}" x2="${bx}" y2="${H-padB}" stroke="var(--line)" stroke-dasharray="3 3"/><text x="${bx}" y="${H-padB+12}" text-anchor="middle" font-size="9" fill="var(--ink-faint)">2. HJ</text>`;
+  }
+  const line = `<polyline points="${series.map((p,i)=>`${x(i).toFixed(1)},${y(p.value).toFixed(1)}`).join(' ')}" fill="none" stroke="var(--accent)" stroke-width="1.5" opacity=".5"/>`;
+  const dots = series.map((p, i) => {
+    const col = p.type === 'schriftlich' ? '#3f6fb0' : '#7a63bd';
+    return `<circle cx="${x(i).toFixed(1)}" cy="${y(p.value).toFixed(1)}" r="4" fill="${col}"><title>${esc(p.label)}: ${fmtGrade(p.value, scale, false)}${p.date?' ('+fmtDate(p.date)+')':''}</title></circle>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="xMidYMid meet" style="display:block">${grid}${boundary}${line}${dots}</svg>
+    <div class="legend" style="margin-top:6px"><span><i style="background:#3f6fb0"></i> schriftlich</span><span><i style="background:#7a63bd"></i> mündlich</span></div>`;
+}
+/* Simulation: Gesamtnote eines Halbjahres mit einer hypothetisch ergänzten Note */
+function simulateGesamt(course, hyKey, sId, extra) {
+  const hy = course.halfYears[hyKey];
+  const gr = data.grades[sId] || {};
+  let schrift = hy.columns.filter(c => c.type === 'schriftlich').map(c => gr[c.id]).filter(v => v != null && !isNaN(v));
+  let muend = hy.columns.filter(c => c.type === 'muendlich').map(c => gr[c.id]).filter(v => v != null && !isNaN(v));
+  if (extra) { if (extra.type === 'schriftlich') schrift = schrift.concat(extra.value); else muend = muend.concat(extra.value); }
+  const avg = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
+  const wAvg = applyBonus(avg(schrift), hy.sonstige.filter(s => s.scope === 'schriftlich'), sId);
+  const mAvg = applyBonus(avg(muend), hy.sonstige.filter(s => s.scope === 'muendlich'), sId);
+  const wt = getWeight(course, sId, hyKey);
+  let g;
+  if (wAvg == null && mAvg == null) g = null;
+  else if (wAvg == null) g = mAvg;
+  else if (mAvg == null) g = wAvg;
+  else g = wAvg * (wt.w / 100) + mAvg * (wt.m / 100);
+  return applyBonus(g, hy.sonstige.filter(s => s.scope === 'allgemein'), sId);
+}
+function targetOptions(scale, current) {
+  let out = '';
+  for (let p = 15; p >= 0; p--) {
+    const lbl = scale === 'noten' ? `${NOTE_MAP[p]}  (${p} P.)` : `${p} Pkt  ·  ${NOTE_MAP[p]}`;
+    out += `<option value="${p}" ${current === p ? 'selected' : ''}>${lbl}</option>`;
+  }
+  return out;
+}
+
 /* ---------- Klassenarbeit ---------- */
 function schemeGrade(scheme, percent) {
   if (percent == null) return null;
@@ -293,6 +403,47 @@ function weeksUntil(iso) {
   const days = Math.round((new Date(iso + 'T00:00:00') - today) / 86400000);
   return { days, weeks: Math.round(days / 7) };
 }
+function daysSince(iso) {
+  if (!iso) return Infinity;
+  const today = new Date(); today.setHours(0,0,0,0);
+  return Math.round((today - new Date(iso + 'T00:00:00')) / 86400000);
+}
+
+/* ---------- Backup (JSON export / import) ---------- */
+function exportBackup() {
+  data.meta.lastBackup = todayISO();
+  save();
+  const payload = JSON.stringify({ app: 'Pult', version: 3, exportedAt: new Date().toISOString(), data }, null, 2);
+  const blob = new Blob([payload], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `pult-backup-${todayISO()}.json`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  toast('Backup gespeichert.');
+  if (route.name === 'home') render();
+}
+function importBackupFile(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const parsed = JSON.parse(reader.result);
+      const incoming = parsed && parsed.data ? parsed.data : parsed;
+      if (!incoming || !Array.isArray(incoming.courses)) throw new Error('kein Pult-Backup');
+      modal('Backup einlesen?', `<p>Das Backup enthält <b>${incoming.courses.length} Kurse</b>. Der aktuelle Datenbestand in diesem Browser wird <b>ersetzt</b>.</p>`, [
+        { label: 'Abbrechen', onClick: closeModal },
+        { label: 'Ersetzen', cls: 'primary', onClick: () => {
+          data = Object.assign(DEFAULT_DATA(), incoming);
+          save(); closeModal(); go({ name: 'home' });
+          toast('Backup eingelesen.');
+        }},
+      ]);
+    } catch (e) {
+      toast('Datei ist kein gültiges Pult-Backup.');
+    }
+  };
+  reader.readAsText(file);
+}
 
 /* ============================================================
    RENDER
@@ -303,6 +454,7 @@ function render() {
   renderCrumbs();
   renderTopbarRight();
   if (route.name === 'ka') return renderKA();
+  if (route.name === 'student') return renderStudent();
   if (route.name === 'course') return renderCourse();
   return renderHome();
 }
@@ -311,9 +463,11 @@ function renderCrumbs() {
   if (route.name === 'home') { el.innerHTML = `<span class="here">Kurse</span>`; return; }
   const c = getCourse(route.courseId);
   const base = c ? c.subject + ' · ' + c.className : '';
-  if (route.name === 'ka') {
-    const col = findKaColumn(c);
-    el.innerHTML = `<a class="here" id="crumbCourse" style="cursor:pointer;color:#bfdad4">${esc(base)}</a><span class="sep">›</span><span class="here">${esc(col ? col.label : 'Klassenarbeit')}</span>`;
+  if (route.name === 'ka' || route.name === 'student') {
+    let leaf = 'Klassenarbeit';
+    if (route.name === 'ka') { const col = findKaColumn(c); leaf = col ? col.label : 'Klassenarbeit'; }
+    else { const s = c && c.students.find(x => x.id === route.studentId); leaf = s ? `${s.firstName} ${s.lastName||''}` : 'Schüler:in'; }
+    el.innerHTML = `<a class="here" id="crumbCourse" style="cursor:pointer;color:#bfdad4">${esc(base)}</a><span class="sep">›</span><span class="here">${esc(leaf)}</span>`;
     const cc = document.getElementById('crumbCourse'); if (cc) cc.onclick = () => go({ name: 'course', courseId: c.id });
     return;
   }
@@ -324,7 +478,7 @@ function renderTopbarRight() {
   if (route.name === 'home') {
     el.innerHTML = `<button class="btn ghost small" id="btnSettings">Termine</button>`;
     document.getElementById('btnSettings').onclick = openMetaSettings;
-  } else if (route.name === 'ka') {
+  } else if (route.name === 'ka' || route.name === 'student') {
     el.innerHTML = `<button class="btn ghost small" id="btnBack">‹ Kurs</button>`;
     document.getElementById('btnBack').onclick = () => go({ name: 'course', courseId: route.courseId });
   } else {
@@ -342,6 +496,7 @@ function renderHome() {
   const ferien = weeksUntil(data.meta.ferienDatum);
   const zeugnis = weeksUntil(data.meta.zeugnisDatum);
   const studCount = data.courses.reduce((a, c) => a + c.students.length, 0);
+  const backupOverdue = data.courses.length && (!data.meta.lastBackup || daysSince(data.meta.lastBackup) > 7);
   const weekTile = (w, label, dateIso) => {
     if (!w) return `<div class="value">–</div><div class="foot">Datum festlegen ›</div>`;
     const txt = w.days < 0 ? 'vorbei' : (w.weeks <= 0 ? `<1<small> Woche</small>` : `${w.weeks}<small> Wochen</small>`);
@@ -349,6 +504,9 @@ function renderHome() {
   };
 
   app().innerHTML = `
+    ${backupOverdue ? `<div class="notice" id="backupNote" style="display:flex;justify-content:space-between;align-items:center;gap:12px;border-color:var(--amber)">
+      <span>${data.meta.lastBackup ? 'Letztes Backup: '+fmtDateLong(data.meta.lastBackup)+'.' : 'Noch kein Backup erstellt.'} Sichere deine Daten regelmäßig.</span>
+      <button class="btn small" id="backupNow">Backup jetzt</button></div>` : ''}
     <section class="dash">
       <div class="dash-card clickable" id="dashFerien">
         <div class="label">${esc(data.meta.ferienLabel || 'Nächste Ferien')}</div>
@@ -376,6 +534,7 @@ function renderHome() {
   document.getElementById('btnNewCourse').onclick = () => openCourseForm();
   document.getElementById('dashFerien').onclick = openMetaSettings;
   document.getElementById('dashZeugnis').onclick = openMetaSettings;
+  const bn = document.getElementById('backupNow'); if (bn) bn.onclick = exportBackup;
 
   const grid = document.getElementById('courseGrid');
   if (!data.courses.length) {
@@ -391,7 +550,7 @@ function renderHome() {
         <div class="cc-subject">${esc(c.subject)}</div>
         <div class="cc-class">${esc(c.className)}</div>
         <span class="cc-tag" style="background:${m==null?'var(--accent-soft)':col.bg};color:${m==null?'var(--accent-ink)':col.fg}">
-          Ø ${m==null?'–':m.toFixed(1)}${m==null?'':' · '+noteLabel(m)}</span>
+          Ø ${fmtGrade(m, c.scale, true)}${m==null||c.scale==='noten'?'':' · '+noteLabel(m)}</span>
       </div>
       <div class="cc-foot"><span>${c.students.length} Schüler:innen</span><span>Notenschnitt</span></div>
     `;
@@ -415,11 +574,12 @@ function renderCourse() {
     <div class="page-head">
       <div>
         <h1>${esc(c.subject)} <span style="color:var(--ink-faint);font-weight:600">${esc(c.className)}</span></h1>
-        <div class="sub">Gewichtung ${c.weightWritten}% schriftlich · ${c.weightOral}% mündlich${route.hy==='2'?` · Endjahr ${c.weightHY1}/${c.weightHY2}`:''}</div>
+        <div class="sub">${scaleName(c.scale)} · Gewichtung ${c.weightWritten}% schr. · ${c.weightOral}% mündl.${route.hy==='2'?` · Endjahr ${c.weightHY1}/${c.weightHY2}`:''}</div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn small" id="btnCourseEdit">Kurs bearbeiten</button>
+        <button class="btn small" id="btnZwischen">+ Zwischenstand</button>
         <button class="btn small" id="btnStudents">Schüler:innen</button>
+        <button class="btn small" id="btnCourseEdit">Kurs bearbeiten</button>
       </div>
     </div>
 
@@ -459,6 +619,7 @@ function renderCourse() {
   document.querySelectorAll('#viewSeg button').forEach(b => b.onclick = () => go({ view: b.dataset.v }));
   document.getElementById('btnCourseEdit').onclick = () => openCourseForm(c);
   document.getElementById('btnStudents').onclick = () => openStudents(c);
+  document.getElementById('btnZwischen').onclick = () => createZwischenstand(c);
   document.getElementById('btnAddSchrift').onclick = () => openColumnForm(c, 'schriftlich');
   document.getElementById('btnAddKA').onclick = () => createKA(c);
   document.getElementById('btnAddMuend').onclick = () => openColumnForm(c, 'muendlich');
@@ -474,6 +635,174 @@ function quickMitarbeit(c) {
   hy.columns.push({ id: uid(), type: 'muendlich', label: 'Mitarbeit', date: todayISO() });
   save(); renderCourse();
   toast('Mitarbeit-Spalte hinzugefügt.');
+}
+
+/* ============================================================
+   Zwischenstand — eingefrorener Notenstand (nicht in Berechnung)
+   ============================================================ */
+function snapshotValues(c, hyKey) {
+  const v = {};
+  c.students.forEach(s => { const g = effGesamt(c, hyKey, s.id).value; if (g != null) v[s.id] = g; });
+  return v;
+}
+function createZwischenstand(c) {
+  const hyKey = route.hy;
+  modal('Zwischenstand einfügen', `
+    <div class="notice">Friert den aktuellen Gesamtstand (${hyKey}. Halbjahr) zum gewählten Datum ein — z. B. als Leistungsrückmeldung vor den Ferien. Fließt <b>nicht</b> in die Notenberechnung ein.</div>
+    <div class="row2">
+      <div class="field"><label>Bezeichnung</label><input id="zwLabel" type="text" value="Zwischenstand" placeholder="z. B. vor Osterferien"></div>
+      <div class="field"><label>Datum</label><input id="zwDate" type="date" value="${todayISO()}"></div>
+    </div>
+  `, [
+    { label: 'Abbrechen', onClick: closeModal },
+    { label: 'Einfügen', cls: 'primary', onClick: () => {
+      const col = { id: uid(), type: 'zwischenstand', label: val('zwLabel').trim() || 'Zwischenstand', date: val('zwDate'), values: snapshotValues(c, hyKey) };
+      c.halfYears[hyKey].columns.push(col);
+      save(); closeModal(); renderCourse();
+      toast('Zwischenstand eingefroren.');
+    }},
+  ]);
+}
+function openZwischenstand(c, colId) {
+  const hy = c.halfYears[route.hy];
+  const col = hy.columns.find(x => x.id === colId);
+  if (!col) return;
+  modal('Zwischenstand', `
+    <div class="notice">Eingefrorener Gesamtstand vom ${col.date?fmtDateLong(col.date):'—'}. Nur Anzeige, ändert die Noten nicht.</div>
+    <div class="row2">
+      <div class="field"><label>Bezeichnung</label><input id="zwLabel" type="text" value="${esc(col.label||'')}"></div>
+      <div class="field"><label>Datum</label><input id="zwDate" type="date" value="${col.date||''}"></div>
+    </div>
+    <button class="btn small" id="zwRefresh" style="margin-top:4px">Werte auf heutigen Stand aktualisieren</button>
+  `, [
+    { label: 'Löschen', cls: 'danger', onClick: () => {
+      hy.columns = hy.columns.filter(x => x.id !== col.id);
+      save(); closeModal(); renderCourse();
+    }},
+    { label: 'Abbrechen', onClick: closeModal },
+    { label: 'Speichern', cls: 'primary', onClick: () => {
+      col.label = val('zwLabel').trim() || 'Zwischenstand'; col.date = val('zwDate');
+      save(); closeModal(); renderCourse();
+    }},
+  ]);
+  document.getElementById('zwRefresh').onclick = () => {
+    col.values = snapshotValues(c, route.hy); save(); toast('Zwischenstand aktualisiert.');
+  };
+}
+
+/* ============================================================
+   Schüler-Detailseite (Hub: alle Noten + Rechenweg)
+   ============================================================ */
+function renderStudent() {
+  const c = getCourse(route.courseId);
+  if (!c) return go({ name: 'home' });
+  const s = c.students.find(x => x.id === route.studentId);
+  if (!s) return go({ name: 'course', courseId: c.id });
+  const scale = c.scale;
+
+  const valChip = (pts, avg) => {
+    const gc = gradeColor(pts);
+    const fg = (gc.fg === 'var(--g-top-fg)' || gc.fg === 'var(--g-fail-fg)') ? gc.fg : (gc.fg === 'var(--line)' ? 'var(--ink-faint)' : gc.fg);
+    const bg = gc.bg === 'transparent' ? 'transparent' : gc.bg;
+    return `<span class="sd-chip" style="background:${bg};color:${fg}">${fmtGrade(pts, scale, avg)}</span>`;
+  };
+
+  const leistungRow = (col, hyKey) => {
+    const v = (data.grades[s.id] || {})[col.id];
+    return `<div class="cs-line sd-grade" data-col="${col.id}" data-hy="${hyKey}">
+      <span>${esc(col.label)}${col.ka?' <span class="pill" style="font-size:9px;padding:0 5px">KA</span>':''}${col.date?` <span class="cs-sub">${fmtDate(col.date)}</span>`:''}</span>
+      <span class="cs-vals">${valChip(v, false)}</span></div>`;
+  };
+  const sonstRow = (so) => {
+    const v = (data.sonstigeValues[s.id] || {})[so.id];
+    return `<div class="cs-line sd-sonst" data-so="${so.id}" data-hy-sonst><span>Bonus: ${esc(so.label)} (${so.percent}%)</span><span class="cs-vals">${valChip(v, false)}</span></div>`;
+  };
+
+  const hyBlock = (hyKey) => {
+    const hy = c.halfYears[hyKey];
+    const comp = computeHalf(c, hyKey, s.id);
+    const eff = effGesamt(c, hyKey, s.id);
+    const schrift = hy.columns.filter(x => x.type === 'schriftlich');
+    const muend = hy.columns.filter(x => x.type === 'muendlich');
+    const manual = eff.manual != null && eff.computed != null;
+    return `<div class="calc-block">
+      <h3>${hyKey}. Halbjahr</h3>
+      <div class="cs-sub" style="margin-bottom:4px">Schriftlich</div>
+      ${schrift.length ? schrift.map(col => leistungRow(col, hyKey)).join('') : '<div class="cs-line cs-sub"><span>keine</span><span></span></div>'}
+      ${hy.sonstige.filter(x=>x.scope==='schriftlich').map(sonstRow).join('')}
+      <div class="cs-line"><span><b>Ø schriftlich</b></span><span class="cs-vals">${fmtGrade(comp.wAvg, scale, true)}</span></div>
+      <div class="cs-sub" style="margin:8px 0 4px">Mündlich</div>
+      ${muend.length ? muend.map(col => leistungRow(col, hyKey)).join('') : '<div class="cs-line cs-sub"><span>keine</span><span></span></div>'}
+      ${hy.sonstige.filter(x=>x.scope==='muendlich').map(sonstRow).join('')}
+      <div class="cs-line"><span><b>Ø mündlich</b></span><span class="cs-vals">${fmtGrade(comp.mAvg, scale, true)}</span></div>
+      ${hy.sonstige.filter(x=>x.scope==='allgemein').map(sonstRow).join('')}
+      <div class="cs-line total"><span>Gesamtnote${manual?' (manuell)':''}</span>
+        <span class="cs-vals">${valChip(eff.value, true)}${manual?` <span class="cs-sub">(${fmtGrade(eff.computed, scale, true)})</span>`:''}</span></div>
+      <button class="btn small sd-calc" data-hy="${hyKey}" style="margin-top:8px">Rechenweg & Note setzen</button>
+    </div>`;
+  };
+
+  const endj = effEndjahr(c, s.id);
+  const endManual = endj.manual != null && endj.computed != null;
+  const series = gradeSeries(c, s.id);
+
+  app().innerHTML = `
+    <div class="page-head">
+      <div>
+        <h1>${esc(s.firstName)} ${esc(s.lastName||'')}</h1>
+        <div class="sub">${esc(c.subject)} ${esc(c.className)} · ${scaleName(scale)}${s.entry?' · Eintritt '+fmtDateLong(s.entry):''}${s.exit?' · Austritt '+fmtDateLong(s.exit):''}</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn small" id="sdSim">Was brauche ich noch?</button>
+        <button class="btn small" id="sdEdit">Stammdaten</button>
+      </div>
+    </div>
+
+    <div class="calc-block">
+      <h3>Notenverlauf</h3>
+      ${verlaufSvg(series, scale)}
+    </div>
+
+    <div class="row2" style="align-items:start;gap:20px">
+      ${hyBlock('1')}
+      ${hyBlock('2')}
+    </div>
+
+    <div class="calc-block" style="border-left:4px solid var(--accent)">
+      <h3>Endjahresnote (${c.weightHY1}/${c.weightHY2})</h3>
+      <div class="cs-line"><span>Gesamt 1. Halbjahr</span><span class="cs-vals">${fmtGrade(endj.g1, scale, true)}</span></div>
+      <div class="cs-line"><span>Gesamt 2. Halbjahr</span><span class="cs-vals">${fmtGrade(endj.g2, scale, true)}</span></div>
+      <div class="cs-line total"><span>Endjahr${endManual?' (manuell)':''}</span>
+        <span class="cs-vals">${valChip(endj.value, true)}${endManual?` <span class="cs-sub">(${fmtGrade(endj.computed, scale, true)})</span>`:''}</span></div>
+      <button class="btn small" id="sdEndCalc" style="margin-top:8px">Rechenweg & Note setzen</button>
+    </div>
+
+    <div class="notice" style="margin-top:16px">Notenverlauf-Grafik und Beobachtungsnotizen folgen in den nächsten Phasen.</div>
+  `;
+
+  document.getElementById('sdEdit').onclick = () => openStudentForm(c, s.id);
+  document.getElementById('sdSim').onclick = () => openSimulator(c, s.id);
+  app().querySelectorAll('.sd-grade').forEach(row => row.onclick = () => {
+    const col = c.halfYears[row.dataset.hy].columns.find(x => x.id === row.dataset.col);
+    if (col.ka) return go({ name: 'ka', courseId: c.id, columnId: col.id, kaTab: 'eingabe' });
+    const cur = (data.grades[s.id] || {})[col.id];
+    openPad(`${esc(s.firstName)} — ${esc(col.label)}`, cur, v => {
+      if (!data.grades[s.id]) data.grades[s.id] = {};
+      if (v == null) delete data.grades[s.id][col.id]; else data.grades[s.id][col.id] = v;
+      save(); renderStudent();
+    }, scale);
+  });
+  app().querySelectorAll('.sd-sonst').forEach(row => row.onclick = () => {
+    const soId = row.dataset.so;
+    const cur = (data.sonstigeValues[s.id] || {})[soId];
+    openPad(`${esc(s.firstName)} — Bonus`, cur, v => {
+      if (!data.sonstigeValues[s.id]) data.sonstigeValues[s.id] = {};
+      if (v == null) delete data.sonstigeValues[s.id][soId]; else data.sonstigeValues[s.id][soId] = v;
+      save(); renderStudent();
+    }, scale);
+  });
+  app().querySelectorAll('.sd-calc').forEach(b => b.onclick = () => { route.hy = b.dataset.hy; openCalc(c, s.id, 'gesamt'); });
+  document.getElementById('sdEndCalc').onclick = () => openCalc(c, s.id, 'endjahr');
 }
 
 /* ============================================================
@@ -547,7 +876,7 @@ function renderKaEingabe(c, col) {
       ${cells}
       <td class="ka-sum" data-sum="${s.id}"><div class="cell">${tot.achieved==null?'–':fmtNum(tot.achieved)}/${maxTotal}</div></td>
       <td class="ka-pct" data-pct="${s.id}"><div class="cell">${tot.percent==null?'–':Math.round(tot.percent)+'%'}</div></td>
-      <td class="ka-note" data-note="${s.id}">${kaNoteCell(tot.grade)}</td>
+      <td class="ka-note" data-note="${s.id}">${kaNoteCell(tot.grade, c.scale)}</td>
     </tr>`;
   }).join('');
 
@@ -576,16 +905,18 @@ function renderKaEingabe(c, col) {
       const tot = kaTotals(col, sId);
       body.querySelector(`[data-sum="${sId}"] .cell`).textContent = (tot.achieved==null?'–':fmtNum(tot.achieved)) + '/' + maxTotal;
       body.querySelector(`[data-pct="${sId}"] .cell`).textContent = tot.percent==null?'–':Math.round(tot.percent)+'%';
-      body.querySelector(`[data-note="${sId}"]`).innerHTML = kaNoteCell(tot.grade);
+      body.querySelector(`[data-note="${sId}"]`).innerHTML = kaNoteCell(tot.grade, c.scale);
       syncKaGrades(c, col);
       save();
     };
   });
 }
-function kaNoteCell(grade) {
+function kaNoteCell(grade, scale) {
+  scale = scale || 'punkte';
   const col = gradeColor(grade);
+  const sub = scale === 'noten' ? '' : `<span class="nt" style="color:${col.fg}">${noteLabel(grade)}</span>`;
   return `<div class="cell" style="background:${col.bg};color:${col.fg}">
-    <span>${grade==null?'–':grade}</span>${grade==null?'':`<span class="nt" style="color:${col.fg}">${noteLabel(grade)}</span>`}</div>`;
+    <span>${grade==null?'–':fmtGrade(grade, scale, false)}</span>${grade==null?'':sub}</div>`;
 }
 
 /* --- Reiter: Bewertungsbogen (Aufgaben + Punkte/Prozent-Schema) --- */
@@ -730,13 +1061,15 @@ function renderKaStatistik(c, col) {
       <span class="cs-vals">Ø ${fmtNum(ts.m)} / ${fmtNum(ts.max)} (${Math.round(ts.pct)}%)</span></div>`).join('');
 
   const gcAvg = gradeColor(avgGrade);
+  const scale = c.scale;
+  const noteUnit = scale === 'noten' ? '' : ' Pkt';
   body.innerHTML = `
     <div class="stat-grid">
       <div class="dash-card"><div class="label">Teilgenommen</div><div class="value">${parts.length}<small> / ${c.students.length}</small></div></div>
       <div class="dash-card" style="border-left-color:${gcAvg.bg==='transparent'?'var(--accent)':gcAvg.bg}">
-        <div class="label">Ø Note</div><div class="value">${avgGrade.toFixed(1)}<small> Pkt · ${noteLabel(avgGrade)}</small></div></div>
+        <div class="label">Ø Note</div><div class="value">${fmtGrade(avgGrade, scale, true)}<small>${noteUnit}${scale==='noten'?'':' · '+noteLabel(avgGrade)}</small></div></div>
       <div class="dash-card"><div class="label">Ø Punkte (roh)</div><div class="value">${fmtNum(avgRaw)}<small> / ${fmtNum(maxTotal)} · ${Math.round(avgPct)}%</small></div></div>
-      <div class="dash-card"><div class="label">Median Note</div><div class="value">${fmtNum(medGrade)}<small> Pkt · ${noteLabel(medGrade)}</small></div></div>
+      <div class="dash-card"><div class="label">Median Note</div><div class="value">${fmtGrade(medGrade, scale, true)}<small>${noteUnit}${scale==='noten'?'':' · '+noteLabel(medGrade)}</small></div></div>
       <div class="dash-card"><div class="label">Median Punkte</div><div class="value">${fmtNum(medRaw)}<small> roh</small></div></div>
       <div class="dash-card"><div class="label">Bestanden (≥5 Pkt)</div><div class="value">${bestanden}<small> · ${durchgef} unter 05</small></div></div>
     </div>
@@ -764,6 +1097,7 @@ function renderTable(c) {
     return;
   }
 
+  const scale = c.scale || 'punkte';
   const isGesamt = route.view === 'gesamt';
   const showS = isGesamt || route.view === 'schriftlich';
   const showM = isGesamt || route.view === 'muendlich';
@@ -772,6 +1106,7 @@ function renderTable(c) {
   const sonstS = hy.sonstige.filter(s => s.scope === 'schriftlich');
   const sonstM = hy.sonstige.filter(s => s.scope === 'muendlich');
   const sonstA = hy.sonstige.filter(s => s.scope === 'allgemein');
+  const zwCols = hy.columns.filter(x => x.type === 'zwischenstand');
 
   const headCols = (cols, grpClass) => cols.map(col => `
     <th class="colhead ${grpClass}" data-col="${col.id}">
@@ -786,8 +1121,10 @@ function renderTable(c) {
   if (showM) { thead += headCols(muendCols, 'grp-muend'); thead += `<th class="grp-muend">Ø mündl.</th>`; thead += headSonst(sonstM); }
   const stickyGesamt = isGesamt && route.hy !== '2';   // in HJ1 ist Gesamt die letzte Spalte
   const stickyEndjahr = isGesamt && route.hy === '2';  // in HJ2 ist Endjahr die letzte Spalte
+  const zwHead = zwCols.map(col => `<th class="grp-prev zw-head" data-zw="${col.id}">${esc(col.label||'Zwischenstand')}<span class="ch-date">${fmtDate(col.date)}</span></th>`).join('');
   if (isGesamt) {
     thead += headSonst(sonstA);
+    thead += zwHead;
     thead += `<th class="grp-final ${stickyGesamt?'col-sticky-r':''}">Gesamt</th>`;
     if (route.hy === '2') thead += `<th class="grp-final col-sticky-r">Endjahr</th>`;
   }
@@ -796,29 +1133,31 @@ function renderTable(c) {
   const cell = (pts) => {
     const col = gradeColor(pts);
     const has = pts != null && !isNaN(pts);
-    return `<div class="cell ${has?'':'empty'}" style="background:${col.bg};color:${col.fg}">${has ? pts : '·'}</div>`;
+    return `<div class="cell ${has?'':'empty'}" style="background:${col.bg};color:${col.fg}">${has ? fmtGrade(pts, scale, false) : '·'}</div>`;
   };
   const avgCell = (v) => {
     const col = gradeColor(v);
     const fg = (col.fg === 'var(--g-top-fg)' || col.fg === 'var(--g-fail-fg)') ? 'var(--ink)' : col.fg;
-    return `<div class="cell" style="color:${fg}">${v==null?'–':v.toFixed(1)}</div>`;
+    return `<div class="cell" style="color:${fg}">${fmtGrade(v, scale, true)}</div>`;
   };
-  const finalCell = (eff) => {
+  const finalCell = (eff, extra) => {
     const v = eff.value, col = gradeColor(v);
     const manual = eff.manual != null && eff.computed != null;
     return `<div class="cell ${manual?'manual':''}" style="background:${col.bg};color:${col.fg}">
-      <span class="pt">${v==null?'–':v.toFixed(1)}</span>
-      <span class="nt" style="color:${col.fg}">${v==null?'':noteLabel(v)}</span>
-      ${manual?`<span class="calc" style="color:${col.fg}">(${eff.computed.toFixed(1)})</span>`:''}</div>`;
+      <span class="pt">${fmtGrade(v, scale, true)}${extra||''}</span>
+      ${scale==='noten'?'':`<span class="nt" style="color:${col.fg}">${v==null?'':noteLabel(v)}</span>`}
+      ${manual?`<span class="calc" style="color:${col.fg}">(${fmtGrade(eff.computed, scale, true)})</span>`:''}</div>`;
   };
 
   const rows = c.students.map(s => {
     const gr = data.grades[s.id] || {};
     const comp = computeHalf(c, route.hy, s.id);
-    let tr = `<tr class="${studentActive(s)?'':'inactive'}"><td class="col-name"><span class="sname">${esc(s.firstName)} ${esc(s.lastName||'')}${s.exit?' <small>(aus)</small>':''}</span></td>`;
+    const sparkVals = gradeSeries(c, s.id, [route.hy]).map(p => p.value);
+    const spark = sparkVals.length >= 2 ? `<div class="spark">${sparkSvg(sparkVals)}</div>` : '';
+    let tr = `<tr class="${studentActive(s)?'':'inactive'}"><td class="col-name"><span class="sname sname-link" data-student="${s.id}">${esc(s.firstName)} ${esc(s.lastName||'')}${s.exit?' <small>(aus)</small>':''}</span>${spark}</td>`;
     if (route.hy === '2') {
       const g1 = effGesamt(c, '1', s.id).value;
-      tr += `<td class="prev-cell"><div class="cell">${g1==null?'–':g1.toFixed(1)}</div></td>`;
+      tr += `<td class="prev-cell"><div class="cell">${fmtGrade(g1, scale, true)}</div></td>`;
     }
     if (showS) {
       schriftCols.forEach(col => tr += `<td class="grade-cell" data-s="${s.id}" data-col="${col.id}">${cell(gr[col.id])}</td>`);
@@ -832,7 +1171,8 @@ function renderTable(c) {
     }
     if (isGesamt) {
       sonstA.forEach(so => tr += sonstCell(s.id, so.id));
-      tr += `<td class="final ${stickyGesamt?'col-sticky-r':''}" data-final="gesamt" data-s="${s.id}">${finalCell(effGesamt(c, route.hy, s.id))}</td>`;
+      zwCols.forEach(col => tr += `<td class="prev-cell"><div class="cell">${fmtGrade((col.values||{})[s.id], scale, true)}</div></td>`);
+      tr += `<td class="final ${stickyGesamt?'col-sticky-r':''}" data-final="gesamt" data-s="${s.id}">${finalCell(effGesamt(c, route.hy, s.id), trendArrowSvg(trendDir(c, route.hy, s.id)))}</td>`;
       if (route.hy === '2') tr += `<td class="final col-sticky-r" data-final="endjahr" data-s="${s.id}">${finalCell(effEndjahr(c, s.id))}</td>`;
     }
     tr += `</tr>`;
@@ -853,25 +1193,32 @@ function renderTable(c) {
     });
   host.querySelectorAll('td.final').forEach(td =>
     td.onclick = () => openCalc(c, td.dataset.s, td.dataset.final));
+  host.querySelectorAll('.sname-link').forEach(el =>
+    el.onclick = () => go({ name: 'student', courseId: c.id, studentId: el.dataset.student }));
+  host.querySelectorAll('.zw-head').forEach(th =>
+    th.onclick = () => openZwischenstand(c, th.dataset.zw));
 
   function sonstCell(sId, soId) {
     const v = (data.sonstigeValues[sId] || {})[soId];
     const col = gradeColor(v);
     const has = v != null && !isNaN(v);
-    return `<td class="sonst-cell" data-s="${sId}" data-so="${soId}"><div class="cell" style="color:${has?col.fg==='var(--g-top-fg)'||col.fg==='var(--g-fail-fg)'?'var(--ink)':col.fg:'var(--line)'}">${has?v:'·'}</div></td>`;
+    return `<td class="sonst-cell" data-s="${sId}" data-so="${soId}"><div class="cell" style="color:${has?col.fg==='var(--g-top-fg)'||col.fg==='var(--g-fail-fg)'?'var(--ink)':col.fg:'var(--line)'}">${has?fmtGrade(v, scale, false):'·'}</div></td>`;
   }
 }
 
 /* ============================================================
    Punkte-Pad (generisch)
    ============================================================ */
-function openPad(title, current, onPick) {
+function openPad(title, current, onPick, scale) {
+  scale = scale || 'punkte';
   let pad = '';
   for (let p = 15; p >= 0; p--) {
     const gc = gradeColor(p);
     const bg = gc.bg === 'transparent' ? '#fff' : gc.bg;
     const fg = gc.fg === 'var(--line)' ? 'var(--ink)' : gc.fg;
-    pad += `<button data-p="${p}" class="${current===p?'sel':''}" style="background:${bg};color:${fg}">${p}<span class="nt" style="color:${fg}">${NOTE_MAP[p]}</span></button>`;
+    const big = scale === 'noten' ? NOTE_MAP[p] : p;
+    const sub = scale === 'noten' ? `${p} P.` : NOTE_MAP[p];
+    pad += `<button data-p="${p}" class="${current===p?'sel':''}" style="background:${bg};color:${fg}">${big}<span class="nt" style="color:${fg}">${sub}</span></button>`;
   }
   modal(title, `<div class="gradepad">${pad}<button class="gradepad-clear btn" data-p="clear">Note entfernen</button></div>`,
     [{ label: 'Fertig', cls: 'primary', onClick: closeModal }]);
@@ -889,7 +1236,7 @@ function openGradeCell(c, sId, colId) {
     if (!data.grades[sId]) data.grades[sId] = {};
     if (v == null) delete data.grades[sId][colId]; else data.grades[sId][colId] = v;
     save(); renderTable(c);
-  });
+  }, c.scale);
 }
 function openSonstCell(c, sId, soId) {
   const s = c.students.find(x => x.id === sId);
@@ -899,7 +1246,7 @@ function openSonstCell(c, sId, soId) {
     if (!data.sonstigeValues[sId]) data.sonstigeValues[sId] = {};
     if (v == null) delete data.sonstigeValues[sId][soId]; else data.sonstigeValues[sId][soId] = v;
     save(); renderTable(c);
-  });
+  }, c.scale);
 }
 
 /* ============================================================
@@ -919,9 +1266,10 @@ function openCalcGesamt(c, s, name) {
   const comp = computeHalf(c, hyKey, s.id);
   const wt = comp.wt;
   const eff = effGesamt(c, hyKey, s.id);
+  const scale = c.scale;
 
   const listCols = (cols) => cols.length
-    ? cols.map(col => `<div class="cs-line"><span>${esc(col.label)}</span><span class="cs-vals">${gr[col.id]??'–'}</span></div>`).join('')
+    ? cols.map(col => `<div class="cs-line"><span>${esc(col.label)}</span><span class="cs-vals">${fmtGrade(gr[col.id], scale, false)}</span></div>`).join('')
     : `<div class="cs-line cs-sub"><span>keine Noten</span><span></span></div>`;
   const listSonst = (scope, base) => hy.sonstige.filter(x => x.scope === scope).map(so => {
     const sv = (data.sonstigeValues[s.id]||{})[so.id];
@@ -934,13 +1282,13 @@ function openCalcGesamt(c, s, name) {
         <h3>Schriftlich</h3>
         ${listCols(hy.columns.filter(x=>x.type==='schriftlich'))}
         ${listSonst('schriftlich', comp.wRaw)}
-        <div class="cs-line"><span>Ø schriftlich</span><span class="cs-vals">${comp.wAvg==null?'–':comp.wAvg.toFixed(2)}</span></div>
+        <div class="cs-line"><span>Ø schriftlich</span><span class="cs-vals">${fmtGrade(comp.wAvg, scale, true)}</span></div>
       </div>
       <div class="calc-block">
         <h3>Mündlich</h3>
         ${listCols(hy.columns.filter(x=>x.type==='muendlich'))}
         ${listSonst('muendlich', comp.mRaw)}
-        <div class="cs-line"><span>Ø mündlich</span><span class="cs-vals">${comp.mAvg==null?'–':comp.mAvg.toFixed(2)}</span></div>
+        <div class="cs-line"><span>Ø mündlich</span><span class="cs-vals">${fmtGrade(comp.mAvg, scale, true)}</span></div>
       </div>
 
       <div class="field">
@@ -953,11 +1301,11 @@ function openCalcGesamt(c, s, name) {
       </div>
 
       ${listSonst('allgemein', comp.gesamt)}
-      <div class="cs-line total"><span>Berechnete Gesamtnote</span><span class="cs-vals">${eff.computed==null?'–':eff.computed.toFixed(2)+' · '+noteLabel(eff.computed)}</span></div>
+      <div class="cs-line total"><span>Berechnete Gesamtnote</span><span class="cs-vals">${eff.computed==null?'–':fmtGrade(eff.computed, scale, true)+(scale==='noten'?'':' · '+noteLabel(eff.computed))}</span></div>
 
       <div class="field" style="margin-top:14px">
-        <label>Manuell überschreiben (Punkte 0–15)</label>
-        <input id="cManual" type="number" min="0" max="15" value="${eff.manual!=null?eff.manual:''}" placeholder="leer = berechnet verwenden">
+        <label>Manuell überschreiben</label>
+        <select id="cManual">${manualOptions(scale, eff.manual)}</select>
         <div class="hint">Wird gesetzt, erscheint die berechnete Kommanote klein in Klammern.</div>
       </div>
     </div>
@@ -973,7 +1321,7 @@ function openCalcGesamt(c, s, name) {
       const mv = val('cManual');
       if (mv === '') delete data.manual[s.id][manKey];
       else data.manual[s.id][manKey] = clamp(parseInt(mv) || 0, 0, 15);
-      save(); closeModal(); renderTable(c);
+      save(); closeModal(); render();
     }},
   ]);
   const cw = document.getElementById('cwW'), cm = document.getElementById('cwM');
@@ -984,10 +1332,12 @@ function openCalcGesamt(c, s, name) {
 
 function openCalcEndjahr(c, s, name) {
   const eff = effEndjahr(c, s.id);
+  const scale = c.scale;
+  const sv = (p) => p == null ? '–' : fmtGrade(p, scale, true) + (scale === 'noten' ? '' : ' · ' + noteLabel(p));
   modal(`Endjahresnote — ${name}`, `
     <div class="calc-sheet">
-      <div class="cs-line"><span>Gesamtnote 1. Halbjahr</span><span class="cs-vals">${eff.g1==null?'–':eff.g1.toFixed(2)+' · '+noteLabel(eff.g1)}</span></div>
-      <div class="cs-line"><span>Gesamtnote 2. Halbjahr</span><span class="cs-vals">${eff.g2==null?'–':eff.g2.toFixed(2)+' · '+noteLabel(eff.g2)}</span></div>
+      <div class="cs-line"><span>Gesamtnote 1. Halbjahr</span><span class="cs-vals">${sv(eff.g1)}</span></div>
+      <div class="cs-line"><span>Gesamtnote 2. Halbjahr</span><span class="cs-vals">${sv(eff.g2)}</span></div>
 
       <div class="field" style="margin-top:12px">
         <label>Gewichtung 1. / 2. Halbjahr (gilt für den Kurs)</label>
@@ -998,11 +1348,11 @@ function openCalcEndjahr(c, s, name) {
         <div class="hint">Standard 30 / 70.</div>
       </div>
 
-      <div class="cs-line total"><span>Berechnete Endjahresnote</span><span class="cs-vals" id="ehCalc">${eff.computed==null?'–':eff.computed.toFixed(2)+' · '+noteLabel(eff.computed)}</span></div>
+      <div class="cs-line total"><span>Berechnete Endjahresnote</span><span class="cs-vals" id="ehCalc">${sv(eff.computed)}</span></div>
 
       <div class="field" style="margin-top:14px">
-        <label>Manuell überschreiben (Punkte 0–15)</label>
-        <input id="ehManual" type="number" min="0" max="15" value="${eff.manual!=null?eff.manual:''}" placeholder="leer = berechnet verwenden">
+        <label>Manuell überschreiben</label>
+        <select id="ehManual">${manualOptions(scale, eff.manual)}</select>
       </div>
     </div>
   `, [
@@ -1014,11 +1364,69 @@ function openCalcEndjahr(c, s, name) {
       const mv = val('ehManual');
       if (mv === '') delete data.manual[s.id].end;
       else data.manual[s.id].end = clamp(parseInt(mv) || 0, 0, 15);
-      save(); closeModal(); renderCourse();
+      save(); closeModal(); render();
     }},
   ]);
   const w1 = document.getElementById('ehW1'), w2 = document.getElementById('ehW2');
   w1.oninput = () => { w2.value = clamp(100 - (parseInt(w1.value) || 0), 0, 100); };
+}
+
+/* ---------- Simulator „Was brauche ich noch?" ----------
+   Modell: mündliche Leistung bleibt konstant, variabel ist die nächste
+   schriftliche Note. Standard-Szenarien für die Notengrenzen 13/10/07/04. */
+function simNeed(c, hyKey, sId, target) {
+  const cur = simulateGesamt(c, hyKey, sId, null);
+  if (cur != null && cur >= target - 1e-9) return { cur, reached: true };
+  let needed = null;
+  for (let x = 0; x <= 15; x++) {
+    const g = simulateGesamt(c, hyKey, sId, { type: 'schriftlich', value: x });
+    if (g != null && g >= target - 1e-9) { needed = x; break; }
+  }
+  const bestG = simulateGesamt(c, hyKey, sId, { type: 'schriftlich', value: 15 });
+  return { cur, reached: false, needed, bestG };
+}
+function openSimulator(c, sId) {
+  const s = c.students.find(x => x.id === sId);
+  const scale = c.scale;
+  modal(`Was brauche ich noch? — ${esc(s.firstName)} ${esc(s.lastName||'')}`, `
+    <div class="field"><label>Halbjahr</label>
+      <select id="simHy"><option value="1">1. Halbjahr</option><option value="2" ${route.hy==='2'?'selected':''}>2. Halbjahr</option></select></div>
+    <div class="calc-block" style="margin-top:4px">
+      <h3>Erreichbar bei gleichbleibender mündlicher Leistung</h3>
+      <div class="cs-sub" id="simCur" style="margin-bottom:6px"></div>
+      <div id="simScenarios"></div>
+    </div>
+    <div class="field"><label>Eigene Zielnote prüfen</label>
+      <select id="simTarget"><option value="">— Zielnote wählen —</option>${targetOptions(scale, null)}</select></div>
+    <div id="simCustom"></div>
+  `, [{ label: 'Schließen', cls: 'primary', onClick: closeModal }]);
+
+  const statusHtml = (t) => {
+    const r = simNeed(c, val('simHy'), sId, t);
+    if (r.reached) return `<span class="sim-status good">bereits erreicht</span>`;
+    if (r.needed != null) return `<span class="sim-status">ab ${fmtGrade(r.needed, scale, false)} in der nächsten Klausur</span>`;
+    return `<span class="sim-status bad">nicht erreichbar</span>`;
+  };
+  const run = () => {
+    const hyKey = val('simHy');
+    const cur = simulateGesamt(c, hyKey, sId, null);
+    document.getElementById('simCur').textContent = `Aktuelle Gesamtnote: ${fmtGrade(cur, scale, true)}. Variabel: die nächste schriftliche Note.`;
+    document.getElementById('simScenarios').innerHTML = [13, 10, 7, 4].map(t => {
+      const extra = scale === 'noten' ? '' : `  <span class="cs-sub">(ab ${t} P.)</span>`;
+      return `<div class="cs-line"><span>Gesamtnote ${noteFromPoints(t)}${extra}</span><span class="cs-vals">${statusHtml(t)}</span></div>`;
+    }).join('');
+
+    const tv = val('simTarget');
+    const box = document.getElementById('simCustom');
+    if (tv === '') { box.innerHTML = ''; return; }
+    const target = parseInt(tv), r = simNeed(c, hyKey, sId, target);
+    const note = scale === 'noten' ? '' : ' · ' + noteLabel(target);
+    if (r.reached) box.innerHTML = `<div class="sim-out good"><b>Sicher.</b> ${fmtGrade(target, scale, false)}${note} steht bereits — auch die schlechteste nächste Klausur hält die Note.</div>`;
+    else if (r.needed != null) box.innerHTML = `<div class="sim-out"><b>Mindestens ${fmtGrade(r.needed, scale, false)}</b> in der nächsten Klausur nötig für ${fmtGrade(target, scale, false)}${note}.</div>`;
+    else box.innerHTML = `<div class="sim-out bad"><b>Nicht mehr erreichbar.</b> Selbst mit ${fmtGrade(15, scale, false)} käme nur ${fmtGrade(r.bestG, scale, true)} heraus.</div>`;
+  };
+  ['simHy', 'simTarget'].forEach(id => document.getElementById(id).onchange = run);
+  run();
 }
 
 /* ============================================================
@@ -1053,6 +1461,14 @@ function openCourseForm(course) {
       <div class="field"><label>Klasse / Kurs</label><input id="fClass" type="text" value="${esc(c.className)}" placeholder="z. B. 9b oder EF"></div>
     </div>
     <div class="field">
+      <label>Notenskala (Eingabe & Anzeige)</label>
+      <select id="fScale">
+        <option value="punkte" ${(c.scale||'punkte')==='punkte'?'selected':''}>Punkte 0–15 (Oberstufe)</option>
+        <option value="noten" ${c.scale==='noten'?'selected':''}>Noten 1–6 mit Tendenz</option>
+      </select>
+      <div class="hint">Intern wird immer gleich gerechnet — nur Eingabe und Anzeige ändern sich.</div>
+    </div>
+    <div class="field">
       <label>Gewichtung schriftlich / mündlich</label>
       <div class="row2">
         <div><input id="fW" type="number" min="0" max="100" value="${c.weightWritten}"> <span class="hint">% schriftlich</span></div>
@@ -1076,8 +1492,9 @@ function openCourseForm(course) {
       if (!subject) return toast('Bitte ein Fach angeben.');
       const w = clamp(parseInt(val('fW')) || 0, 0, 100);
       const h1 = clamp(parseInt(val('fH1')) || 0, 0, 100);
-      if (editing) { c.subject = subject; c.className = className; c.weightWritten = w; c.weightOral = 100 - w; c.weightHY1 = h1; c.weightHY2 = 100 - h1; }
-      else { const nc = newCourse(subject, className); nc.weightWritten = w; nc.weightOral = 100 - w; nc.weightHY1 = h1; nc.weightHY2 = 100 - h1; data.courses.push(nc); }
+      const scale = val('fScale') || 'punkte';
+      if (editing) { c.subject = subject; c.className = className; c.scale = scale; c.weightWritten = w; c.weightOral = 100 - w; c.weightHY1 = h1; c.weightHY2 = 100 - h1; }
+      else { const nc = newCourse(subject, className); nc.scale = scale; nc.weightWritten = w; nc.weightOral = 100 - w; nc.weightHY1 = h1; nc.weightHY2 = 100 - h1; data.courses.push(nc); }
       save(); closeModal(); render();
     }},
   ]);
@@ -1271,29 +1688,82 @@ function openStudentForm(c, id) {
     }},
   ]);
 }
+/* fügt Schüler:innen hinzu, überspringt Duplikate (Vorname+Nachname) */
+function addStudents(c, entries) {
+  const has = (fn, ln) => c.students.some(s =>
+    s.firstName.toLowerCase() === fn.toLowerCase() && (s.lastName||'').toLowerCase() === (ln||'').toLowerCase());
+  let added = 0, skipped = 0;
+  entries.forEach(e => {
+    if (!e.firstName) return;
+    if (has(e.firstName, e.lastName)) { skipped++; return; }
+    c.students.push({ id: uid(), firstName: e.firstName, lastName: e.lastName || '', entry: e.entry || '', exit: e.exit || '' });
+    added++;
+  });
+  save();
+  toast(`${added} hinzugefügt${skipped ? `, ${skipped} Duplikat(e) übersprungen` : ''}.`);
+  openStudents(c);
+}
+function parseGermanDate(s) {
+  if (!s) return '';
+  const m = s.trim().match(/^(\d{1,2})\.(\d{1,2})\.(\d{2,4})$/);
+  if (!m) return /^\d{4}-\d{2}-\d{2}$/.test(s.trim()) ? s.trim() : '';
+  const [, d, mo, y] = m; const yr = y.length === 2 ? '20' + y : y;
+  return `${yr}-${mo.padStart(2,'0')}-${d.padStart(2,'0')}`;
+}
+function parseNameLines(text) {
+  return text.split('\n').map(l => l.trim()).filter(Boolean).map(line => {
+    if (line.includes(',')) { const [ln, fn] = line.split(','); return { lastName: ln.trim(), firstName: (fn||'').trim() }; }
+    const parts = line.split(/\s+/); return { firstName: parts.shift(), lastName: parts.join(' ') };
+  });
+}
+function parseWebUntisCsv(text) {
+  const rows = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const out = [];
+  rows.forEach((line, i) => {
+    const cols = line.split(';').map(x => x.trim());
+    if (i === 0 && /langname|vorname/i.test(line)) return; // Kopfzeile
+    const lastName = cols[0] || '', firstName = cols[1] || '';
+    if (!firstName && !lastName) return;
+    out.push({ firstName, lastName, entry: parseGermanDate(cols[4]), exit: parseGermanDate(cols[5]) });
+  });
+  return out;
+}
+function readFileSmart(file, cb) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    const buf = new Uint8Array(reader.result);
+    let text = new TextDecoder('utf-8').decode(buf);
+    if (text.includes('�')) { try { text = new TextDecoder('windows-1252').decode(buf); } catch (e) {} }
+    cb(text);
+  };
+  reader.readAsArrayBuffer(file);
+}
 function openImport(c) {
   modal('Schüler:innen importieren', `
     <div class="field">
-      <label>Namen einfügen (eine Zeile pro Person)</label>
+      <label>WebUntis-CSV-Datei</label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn small" id="impCsvBtn">CSV-Datei wählen</button>
+        <input type="file" id="impCsvFile" accept=".csv,text/csv,text/plain" hidden>
+      </div>
+      <div class="hint">Spalten <code>Langname;Vorname;Klasse;…;Eintritt;Austritt</code>. Umlaute (UTF-8/Windows-1252) und Datumsformat werden automatisch erkannt, Duplikate übersprungen.</div>
+    </div>
+    <hr style="border:none;border-top:1px solid var(--line-soft);margin:14px 0">
+    <div class="field">
+      <label>Oder Namen einfügen (eine Zeile pro Person)</label>
       <textarea id="impText" placeholder="Lena B.&#10;Jonas K.&#10;Amelie R."></textarea>
-      <div class="hint">Aus WebUntis: Namensliste kopieren und hier einfügen. Erstes Wort = Vorname, Rest = Nachname/Initiale. „Nachname, Vorname" wird auch erkannt.</div>
+      <div class="hint">Erstes Wort = Vorname, Rest = Nachname/Initiale. „Nachname, Vorname" wird auch erkannt.</div>
     </div>
   `, [
     { label: 'Abbrechen', onClick: () => openStudents(c) },
-    { label: 'Importieren', cls: 'primary', onClick: () => {
-      const lines = val('impText').split('\n').map(l => l.trim()).filter(Boolean);
-      let n = 0;
-      lines.forEach(line => {
-        let firstName, lastName;
-        if (line.includes(',')) { const [ln, fn] = line.split(','); lastName = ln.trim(); firstName = (fn||'').trim(); }
-        else { const parts = line.split(/\s+/); firstName = parts.shift(); lastName = parts.join(' '); }
-        if (!firstName) return;
-        c.students.push({ id: uid(), firstName, lastName, entry: '', exit: '' });
-        n++;
-      });
-      save(); toast(`${n} Schüler:innen importiert.`); openStudents(c);
-    }},
+    { label: 'Liste importieren', cls: 'primary', onClick: () => addStudents(c, parseNameLines(val('impText'))) },
   ]);
+  const fileInput = document.getElementById('impCsvFile');
+  document.getElementById('impCsvBtn').onclick = () => fileInput.click();
+  fileInput.onchange = () => {
+    if (!fileInput.files[0]) return;
+    readFileSmart(fileInput.files[0], text => addStudents(c, parseWebUntisCsv(text)));
+  };
 }
 
 /* ---------- Termine / Meta ---------- */
@@ -1308,6 +1778,16 @@ function openMetaSettings() {
     </div>
     <div class="field"><label>Nächste Zeugniskonferenz</label><input id="mZeugnis" type="date" value="${m.zeugnisDatum||''}"></div>
     <hr style="border:none;border-top:1px solid var(--line-soft);margin:16px 0">
+    <div class="field">
+      <label>Datensicherung</label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn small" id="mBackupExport">Backup exportieren</button>
+        <button class="btn small" id="mBackupImport">Backup einlesen</button>
+        <input type="file" id="mBackupFile" accept="application/json,.json" hidden>
+      </div>
+      <div class="hint">${m.lastBackup ? 'Letztes Backup: '+fmtDateLong(m.lastBackup) : 'Noch kein Backup erstellt.'} Daten liegen nur in diesem Browser — regelmäßig sichern.</div>
+    </div>
+    <hr style="border:none;border-top:1px solid var(--line-soft);margin:16px 0">
     <div class="field"><button class="btn danger small" id="mReset">Alle Daten zurücksetzen</button>
       <div class="hint">Löscht sämtliche Kurse, Schüler:innen und Noten aus diesem Browser.</div></div>
   `, [
@@ -1317,6 +1797,10 @@ function openMetaSettings() {
       save(); closeModal(); render();
     }},
   ]);
+  document.getElementById('mBackupExport').onclick = exportBackup;
+  const fileInput = document.getElementById('mBackupFile');
+  document.getElementById('mBackupImport').onclick = () => fileInput.click();
+  fileInput.onchange = () => { if (fileInput.files[0]) importBackupFile(fileInput.files[0]); };
   document.getElementById('mReset').onclick = () => {
     if (!confirm('Wirklich ALLE Daten löschen?')) return;
     localStorage.removeItem(STORE_KEY); data = DEFAULT_DATA(); save(); closeModal(); go({ name: 'home' });
