@@ -1782,7 +1782,15 @@ function renderTable(c) {
 
   const blindCount = c.students.filter(s => studentActive(s) && blindSpot(c, route.hy, s.id)).length;
   const blindNote = blindCount ? `<div class="notice" style="border-color:var(--amber);display:flex;align-items:center;gap:8px"><span class="blind-dot"></span> ${blindCount} ohne aktuelle mündliche Note (über ${BLIND_DAYS} Tage bzw. keine).</div>` : '';
+  // Scroll-Position der Tabelle über den Neuaufbau hinweg bewahren
+  const prevWrap = host.querySelector('.table-wrap');
+  const prevLeft = prevWrap ? prevWrap.scrollLeft : 0;
+  const prevTop = prevWrap ? prevWrap.scrollTop : 0;
   host.innerHTML = `${blindNote}<div class="table-wrap"><table class="grades"><thead>${thead}</thead><tbody>${rows}</tbody></table></div>`;
+  if (prevLeft || prevTop) {
+    const wrap = host.querySelector('.table-wrap');
+    if (wrap) { wrap.scrollLeft = prevLeft; wrap.scrollTop = prevTop; }
+  }
 
   host.querySelectorAll('td.grade-cell').forEach(td =>
     td.onclick = () => openGradeCell(c, td.dataset.s, td.dataset.col));
@@ -1794,7 +1802,7 @@ function renderTable(c) {
     th.onclick = () => {
       const col = hy.columns.find(x => x.id === th.dataset.col);
       if (col && col.ka) go({ name: 'ka', courseId: c.id, columnId: col.id, kaTab: 'eingabe' });
-      else openColumnForm(c, null, th.dataset.col);
+      else openColumnMenu(c, th.dataset.col);
     });
   host.querySelectorAll('td.final').forEach(td =>
     td.onclick = () => openCalc(c, td.dataset.s, td.dataset.final));
@@ -2146,9 +2154,24 @@ function startDurchtippen(c) {
   if (!col) { col = { id: uid(), type: 'muendlich', label: 'Mitarbeit', date: todayISO() }; hy.columns.push(col); save(); }
   openDurchtippen(c, col.id, 0);
 }
-/* bisherige mündliche Kennzahlen (ohne die aktuelle Spalte) */
-function muendlichInfo(c, hyKey, sId, excludeColId) {
-  const cols = c.halfYears[hyKey].columns.filter(x => x.type === 'muendlich' && x.id !== excludeColId);
+/* Aktion für eine bestehende Notenspalte: Durchtippen oder bearbeiten */
+function openColumnMenu(c, colId) {
+  const col = c.halfYears[route.hy].columns.find(x => x.id === colId);
+  if (!col) return;
+  const typLbl = col.type === 'schriftlich' ? 'schriftlich' : 'mündlich';
+  modal(esc(col.label), `
+    <div class="cs-sub" style="margin-bottom:10px">${typLbl}${col.date ? ' · ' + fmtDateLong(col.date) : ''}</div>
+    <div class="chip-list">
+      <button class="btn primary" style="width:100%" id="cmDurch">Durchtippen — ganze Klasse</button>
+      <button class="btn" style="width:100%" id="cmEdit">Spalte bearbeiten</button>
+    </div>`, [{ label: 'Abbrechen', onClick: closeModal }]);
+  document.getElementById('cmDurch').onclick = () => { closeModal(); openDurchtippen(c, colId, 0); };
+  document.getElementById('cmEdit').onclick = () => openColumnForm(c, null, colId);
+}
+/* bisherige Kennzahlen desselben Typs (ohne die aktuelle Spalte) */
+function muendlichInfo(c, hyKey, sId, excludeColId, type) {
+  type = type || 'muendlich';
+  const cols = c.halfYears[hyKey].columns.filter(x => x.type === type && x.id !== excludeColId);
   const withGrade = cols.map(x => ({ date: x.date, v: (data.grades[sId] || {})[x.id] })).filter(o => o.v != null && !isNaN(o.v));
   const vals = withGrade.map(o => o.v);
   const avg = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
@@ -2170,7 +2193,8 @@ function openDurchtippen(c, colId, idx) {
   const s = students[idx];
   const scale = c.scale;
   const cur = (data.grades[s.id] || {})[colId];
-  const info = muendlichInfo(c, route.hy, s.id, colId);
+  const info = muendlichInfo(c, route.hy, s.id, colId, col.type);
+  const avgLbl = col.type === 'schriftlich' ? 'Ø schriftlich' : 'Ø mündlich';
   const trendTxt = info.trend === 'up' ? `steigend ${trendArrowSvg('up')}` : info.trend === 'down' ? `fallend ${trendArrowSvg('down')}` : info.trend === 'flat' ? 'gleichbleibend' : '—';
   let pad = '';
   for (let p = 15; p >= 0; p--) {
@@ -2180,7 +2204,7 @@ function openDurchtippen(c, colId, idx) {
   }
   modal(`${esc(col.label)} — ${esc(s.firstName)} ${esc(s.lastName||'')}  (${idx+1}/${students.length})`,
     `<div class="dt-info">
-       <div><span class="dt-lbl">Ø Mitarbeit</span><b>${fmtGrade(info.avg, scale, true)}</b></div>
+       <div><span class="dt-lbl">${avgLbl}</span><b>${fmtGrade(info.avg, scale, true)}</b></div>
        <div><span class="dt-lbl">Tendenz</span><b>${trendTxt}</b></div>
        <div><span class="dt-lbl">Letzte Note</span><b>${info.lastDate ? fmtDateLong(info.lastDate) : '—'}</b></div>
      </div>
