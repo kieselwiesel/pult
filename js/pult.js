@@ -615,18 +615,40 @@ function exportICS() {
 }
 
 /* ---------- Backup (JSON export / import) ---------- */
-function exportBackup() {
-  data.meta.lastBackup = todayISO();
-  save();
-  const payload = JSON.stringify({ app: 'Pult', version: 3, exportedAt: new Date().toISOString(), data }, null, 2);
+function downloadBackupFile(dataObj, filename) {
+  const payload = JSON.stringify({ app: 'Pult', version: 3, exportedAt: new Date().toISOString(), data: dataObj }, null, 2);
   const blob = new Blob([payload], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href = url; a.download = `pult-backup-${todayISO()}.json`;
+  a.href = url; a.download = filename;
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+/* Volles Backup mit Klarnamen — die eigentliche Sicherung */
+function exportBackup() {
+  data.meta.lastBackup = todayISO();
+  save();
+  downloadBackupFile(data, `pult-backup-${todayISO()}.json`);
   toast('Backup gespeichert.');
   if (route.name === 'home') render();
+}
+/* Ersetzt Schülernamen durch eine Nummer je Kurs (alphabetisch nach Nachname).
+   Arbeitet auf einem Klon; IDs und alle Noten bleiben verknüpft. */
+function pseudonymizeData(d) {
+  (d.courses || []).forEach(c => {
+    const ordered = (c.students || []).slice().sort((a, b) =>
+      (a.lastName || '').localeCompare(b.lastName || '', 'de') ||
+      (a.firstName || '').localeCompare(b.firstName || '', 'de'));
+    ordered.forEach((s, i) => { s.firstName = String(i + 1).padStart(2, '0'); s.lastName = ''; });
+  });
+  return d;
+}
+/* Pseudonymisiertes Backup zum Teilen/Ablegen ohne Namen.
+   Setzt den „letztes Backup"-Zähler NICHT zurück (kein vollwertiger Namens-Restore). */
+function exportBackupPseudonym() {
+  const clone = pseudonymizeData(JSON.parse(JSON.stringify(data)));
+  downloadBackupFile(clone, `pult-backup-pseudonym-${todayISO()}.json`);
+  toast('Pseudonymisiertes Backup gespeichert.');
 }
 function importBackupFile(file) {
   const reader = new FileReader();
@@ -2584,11 +2606,13 @@ function openMetaSettings() {
     <div class="field">
       <label>Datensicherung</label>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn small" id="mBackupExport">Backup exportieren</button>
+        <button class="btn small" id="mBackupExport">Backup mit Namen</button>
+        <button class="btn small" id="mBackupPseudo">Backup pseudonym</button>
         <button class="btn small" id="mBackupImport">Backup einlesen</button>
         <input type="file" id="mBackupFile" accept="application/json,.json" hidden>
       </div>
       <div class="hint">${m.lastBackup ? 'Letztes Backup: '+fmtDateLong(m.lastBackup) : 'Noch kein Backup erstellt.'} Daten liegen nur in diesem Browser — regelmäßig sichern.</div>
+      <div class="hint"><b>Pseudonym:</b> Schülernamen werden durch Nummern ersetzt (alphabetisch nach Nachname, je Kurs) — zum Teilen/Ablegen ohne Namen. Freitext in Notizen, Todos und Terminen wird dabei <b>nicht</b> anonymisiert; zählt nicht als Namens-Sicherung.</div>
     </div>
     <hr style="border:none;border-top:1px solid var(--line-soft);margin:16px 0">
     <div class="field"><button class="btn danger small" id="mReset">Alle Daten zurücksetzen</button>
@@ -2601,6 +2625,7 @@ function openMetaSettings() {
     }},
   ]);
   document.getElementById('mBackupExport').onclick = exportBackup;
+  document.getElementById('mBackupPseudo').onclick = exportBackupPseudonym;
   const fileInput = document.getElementById('mBackupFile');
   document.getElementById('mBackupImport').onclick = () => fileInput.click();
   fileInput.onchange = () => { if (fileInput.files[0]) importBackupFile(fileInput.files[0]); };
