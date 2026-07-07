@@ -348,8 +348,10 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .weight-bar .w-s { background: #6d94c4; }
 .weight-bar .w-m { background: #8f7cc4; }
 
-/* Notenpad (Punkteauswahl) */
-.gradepad { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+/* Notenpad (Punkteauswahl) — 3×5-Raster: mittlere Spalte = volle Noten 1–5
+   untereinander, die 6 (00) zentral darunter */
+.gradepad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.gradepad button[data-p="0"] { grid-column: 2; }
 .gradepad button {
   appearance: none; font: inherit; font-weight: 700; font-size: 17px;
   border: 1px solid var(--line); border-radius: var(--radius);
@@ -475,6 +477,19 @@ td.tt-cell.tt-editable.tt-today { background: #eef6f2; }
 /* ---------- Termine ---------- */
 .chip.termin { border-left: 4px solid var(--accent); }
 .termin-note { font-size: 12px; color: var(--ink-faint); margin-top: 3px; white-space: pre-wrap; }
+
+/* ---------- Backup-Hinweis (Startseite, unaufdringlich) ---------- */
+.backup-hint {
+  appearance: none; background: transparent; border: none; cursor: pointer;
+  display: flex; align-items: center; gap: 8px;
+  margin: 14px 2px 0; padding: 4px 0; font: inherit;
+  font-size: 12px; color: var(--ink-faint);
+}
+.backup-hint .bh-action { color: inherit; font-weight: 600; opacity: .85; }
+.backup-hint .bh-action::before { content: "·"; margin-right: 6px; font-weight: 400; opacity: .7; }
+.backup-hint:hover .bh-action { color: var(--accent); opacity: 1; text-decoration: underline; text-underline-offset: 2px; }
+.backup-hint.due { color: var(--amber); }
+.backup-hint .bh-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--amber); flex: none; }
 
 @media (max-width: 560px) {
   .row2 { grid-template-columns: 1fr; }

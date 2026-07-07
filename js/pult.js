@@ -775,6 +775,16 @@ function renderCourses() {
    ============================================================ */
 let planEdit = false;   // Stundenplan-Bearbeitungsmodus
 
+/* kurzer, unaufdringlicher Text zum letzten Backup */
+function backupAgeText() {
+  const lb = data.meta.lastBackup;
+  if (!lb) return 'Noch kein Backup gesichert';
+  const d = daysSince(lb);
+  if (d <= 0) return 'Letztes Backup: heute';
+  if (d === 1) return 'Letztes Backup: gestern';
+  return `Letztes Backup: vor ${d} Tagen`;
+}
+
 function renderHome() {
   const monday = mondayOf();
   const wdToday = todayWeekday();
@@ -783,6 +793,7 @@ function renderHome() {
   const zeugnis = weeksUntil(data.meta.zeugnisDatum);
   const openTodos = (data.todos || []).filter(t => !t.done).length;
   const nextTermin = upcomingTermine(1)[0];
+  const backupOverdue = data.courses.length && (!data.meta.lastBackup || daysSince(data.meta.lastBackup) > 7);
 
   const weekTile = (w, dateIso) => {
     if (!w) return `<div class="value">–</div><div class="foot">Datum festlegen ›</div>`;
@@ -860,9 +871,14 @@ function renderHome() {
         <tbody>${bodyRows}</tbody>
       </table>
     </div>
+
+    <button class="backup-hint ${backupOverdue ? 'due' : ''}" id="backupHint" title="Backup als JSON-Datei sichern">
+      ${backupOverdue ? '<span class="bh-dot"></span>' : ''}<span>${backupAgeText()}</span><span class="bh-action">jetzt sichern</span>
+    </button>
   `;
 
   bindMainNav();
+  document.getElementById('backupHint').onclick = exportBackup;
   document.getElementById('dashFerien').onclick = openMetaSettings;
   document.getElementById('dashZeugnis').onclick = openMetaSettings;
   document.getElementById('dashTodos').onclick = () => go({ name: 'todos' });
