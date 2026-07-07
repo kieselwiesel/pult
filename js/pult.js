@@ -17,6 +17,7 @@ const DEFAULT_DATA = () => ({
     ferienLabel: 'Ferien',
     zeugnisDatum: '',
     lastBackup: '',      // ISO-Datum des letzten JSON-Backups
+    tableLayout: 'standard',  // 'standard' | 'invers' (Notentabelle)
   },
   courses: [],
   grades: {},          // grades[studentId][columnId] = punkte(0..15)
@@ -1706,6 +1707,13 @@ function renderTable(c) {
   const zwCols = hy.columns.filter(x => x.type === 'zwischenstand');
   const showHA = (c.haLog || []).length > 0;
 
+  // Invertierte Listen-Ansicht: Gesamt/Ø/Neuestes zuerst links
+  const inverted = data.meta.tableLayout === 'invers';
+  const byNewest = (a, b) => (b.date || '').localeCompare(a.date || '');
+  const schriftInv = schriftCols.slice().sort(byNewest);
+  const muendInv = muendCols.slice().sort(byNewest);
+  const allSonst = hy.sonstige.slice();
+
   const headCols = (cols, grpClass) => cols.map(col => `
     <th class="colhead ${grpClass}" data-col="${col.id}">
       <span class="ch-label">${esc(col.label)}${col.ka ? ' <span class="pill" style="font-size:9px;padding:1px 5px;vertical-align:middle">KA</span>' : ''}</span>
@@ -1713,19 +1721,32 @@ function renderTable(c) {
     </th>`).join('');
   const headSonst = list => list.map(so => `<th class="grp-sonst">${esc(so.label)}<span class="ch-date">${so.percent}%</span></th>`).join('');
 
-  let thead = `<tr><th class="col-name">Schüler:in</th>`;
-  if (route.hy === '2') thead += `<th class="grp-prev">Ges. HJ1</th>`;
-  if (showS) { thead += headCols(schriftCols, 'grp-schrift'); thead += `<th class="grp-schrift">Ø schr.</th>`; thead += headSonst(sonstS); }
-  if (showM) { thead += headCols(muendCols, 'grp-muend'); thead += `<th class="grp-muend">Ø mündl.</th>`; thead += headSonst(sonstM); }
-  const stickyGesamt = isGesamt && route.hy !== '2';   // in HJ1 ist Gesamt die letzte Spalte
-  const stickyEndjahr = isGesamt && route.hy === '2';  // in HJ2 ist Endjahr die letzte Spalte
+  const stickyGesamt = isGesamt && route.hy !== '2';   // Standard: Gesamt ist letzte Spalte (HJ1)
   const zwHead = zwCols.map(col => `<th class="grp-prev zw-head" data-zw="${col.id}">${esc(col.label||'Zwischenstand')}<span class="ch-date">${fmtDate(col.date)}</span></th>`).join('');
-  if (isGesamt) {
-    thead += headSonst(sonstA);
-    if (showHA) thead += `<th class="grp-ha ha-head" title="Hausaufgaben: gemacht / fehlt">HA / Fehlt</th>`;
+  const haHead = `<th class="grp-ha ha-head" title="Hausaufgaben: gemacht / fehlt">HA / Fehlt</th>`;
+
+  let thead = `<tr><th class="col-name">Schüler:in</th>`;
+  if (inverted && isGesamt) {
+    if (route.hy === '2') thead += `<th class="grp-final">Endjahr</th>`;
+    thead += `<th class="grp-final">Gesamt</th>`;
+    if (showHA) thead += haHead;
+    thead += headSonst(allSonst);
+    thead += `<th class="grp-schrift">Ø schr.</th>`;
+    thead += headCols(schriftInv, 'grp-schrift');
+    thead += `<th class="grp-muend">Ø mündl.</th>`;
+    thead += headCols(muendInv, 'grp-muend');
     thead += zwHead;
-    thead += `<th class="grp-final ${stickyGesamt?'col-sticky-r':''}">Gesamt</th>`;
-    if (route.hy === '2') thead += `<th class="grp-final col-sticky-r">Endjahr</th>`;
+  } else {
+    if (route.hy === '2') thead += `<th class="grp-prev">Ges. HJ1</th>`;
+    if (showS) { thead += headCols(schriftCols, 'grp-schrift'); thead += `<th class="grp-schrift">Ø schr.</th>`; thead += headSonst(sonstS); }
+    if (showM) { thead += headCols(muendCols, 'grp-muend'); thead += `<th class="grp-muend">Ø mündl.</th>`; thead += headSonst(sonstM); }
+    if (isGesamt) {
+      thead += headSonst(sonstA);
+      if (showHA) thead += haHead;
+      thead += zwHead;
+      thead += `<th class="grp-final ${stickyGesamt?'col-sticky-r':''}">Gesamt</th>`;
+      if (route.hy === '2') thead += `<th class="grp-final col-sticky-r">Endjahr</th>`;
+    }
   }
   thead += `</tr>`;
 
@@ -1754,27 +1775,34 @@ function renderTable(c) {
     const sparkVals = gradeSeries(c, s.id, [route.hy], 'muendlich').map(p => p.value);
     const spark = sparkVals.length >= 2 ? `<div class="spark">${sparkSvg(sparkVals)}</div>` : '';
     const blind = blindSpot(c, route.hy, s.id) ? '<span class="blind-dot" title="keine aktuelle mündliche Note"></span>' : '';
+    const gradeTd = col => `<td class="grade-cell" data-s="${s.id}" data-col="${col.id}">${cell(gr[col.id])}</td>`;
+    const haTd = () => { const hc = haCounts(c, s.id); return `<td class="ha-cell"><div class="cell">${hc.gemacht} <span style="color:${hc.nicht?'var(--g-fail)':'var(--ink-faint)'}">/ ${hc.nicht}</span></div></td>`; };
+    const zwTd = col => `<td class="prev-cell"><div class="cell">${fmtGrade((col.values||{})[s.id], scale, true)}</div></td>`;
     let tr = `<tr class="${studentActive(s)?'':'inactive'}"><td class="col-name"><span class="sname sname-link" data-student="${s.id}">${esc(s.firstName)} ${esc(s.lastName||'')}${blind}${s.exit?' <small>(aus)</small>':''}</span>${spark}</td>`;
-    if (route.hy === '2') {
-      const g1 = effGesamt(c, '1', s.id).value;
-      tr += `<td class="prev-cell"><div class="cell">${fmtGrade(g1, scale, true)}</div></td>`;
-    }
-    if (showS) {
-      schriftCols.forEach(col => tr += `<td class="grade-cell" data-s="${s.id}" data-col="${col.id}">${cell(gr[col.id])}</td>`);
+    if (inverted && isGesamt) {
+      if (route.hy === '2') tr += `<td class="final" data-final="endjahr" data-s="${s.id}">${finalCell(effEndjahr(c, s.id))}</td>`;
+      tr += `<td class="final" data-final="gesamt" data-s="${s.id}">${finalCell(effGesamt(c, route.hy, s.id), trendArrowSvg(trendDir(c, route.hy, s.id)))}</td>`;
+      if (showHA) tr += haTd();
+      allSonst.forEach(so => tr += sonstCell(s.id, so.id));
       tr += `<td class="avg">${avgCell(comp.wAvg)}</td>`;
-      sonstS.forEach(so => tr += sonstCell(s.id, so.id));
-    }
-    if (showM) {
-      muendCols.forEach(col => tr += `<td class="grade-cell" data-s="${s.id}" data-col="${col.id}">${cell(gr[col.id])}</td>`);
+      schriftInv.forEach(col => tr += gradeTd(col));
       tr += `<td class="avg">${avgCell(comp.mAvg)}</td>`;
-      sonstM.forEach(so => tr += sonstCell(s.id, so.id));
-    }
-    if (isGesamt) {
-      sonstA.forEach(so => tr += sonstCell(s.id, so.id));
-      if (showHA) { const hc = haCounts(c, s.id); tr += `<td class="ha-cell"><div class="cell">${hc.gemacht} <span style="color:${hc.nicht?'var(--g-fail)':'var(--ink-faint)'}">/ ${hc.nicht}</span></div></td>`; }
-      zwCols.forEach(col => tr += `<td class="prev-cell"><div class="cell">${fmtGrade((col.values||{})[s.id], scale, true)}</div></td>`);
-      tr += `<td class="final ${stickyGesamt?'col-sticky-r':''}" data-final="gesamt" data-s="${s.id}">${finalCell(effGesamt(c, route.hy, s.id), trendArrowSvg(trendDir(c, route.hy, s.id)))}</td>`;
-      if (route.hy === '2') tr += `<td class="final col-sticky-r" data-final="endjahr" data-s="${s.id}">${finalCell(effEndjahr(c, s.id))}</td>`;
+      muendInv.forEach(col => tr += gradeTd(col));
+      zwCols.forEach(col => tr += zwTd(col));
+    } else {
+      if (route.hy === '2') {
+        const g1 = effGesamt(c, '1', s.id).value;
+        tr += `<td class="prev-cell"><div class="cell">${fmtGrade(g1, scale, true)}</div></td>`;
+      }
+      if (showS) { schriftCols.forEach(col => tr += gradeTd(col)); tr += `<td class="avg">${avgCell(comp.wAvg)}</td>`; sonstS.forEach(so => tr += sonstCell(s.id, so.id)); }
+      if (showM) { muendCols.forEach(col => tr += gradeTd(col)); tr += `<td class="avg">${avgCell(comp.mAvg)}</td>`; sonstM.forEach(so => tr += sonstCell(s.id, so.id)); }
+      if (isGesamt) {
+        sonstA.forEach(so => tr += sonstCell(s.id, so.id));
+        if (showHA) tr += haTd();
+        zwCols.forEach(col => tr += zwTd(col));
+        tr += `<td class="final ${stickyGesamt?'col-sticky-r':''}" data-final="gesamt" data-s="${s.id}">${finalCell(effGesamt(c, route.hy, s.id), trendArrowSvg(trendDir(c, route.hy, s.id)))}</td>`;
+        if (route.hy === '2') tr += `<td class="final col-sticky-r" data-final="endjahr" data-s="${s.id}">${finalCell(effEndjahr(c, s.id))}</td>`;
+      }
     }
     tr += `</tr>`;
     return tr;
@@ -2659,6 +2687,15 @@ function openMetaSettings() {
     <div class="field"><label>Nächste Zeugniskonferenz</label><input id="mZeugnis" type="date" value="${m.zeugnisDatum||''}"></div>
     <hr style="border:none;border-top:1px solid var(--line-soft);margin:16px 0">
     <div class="field">
+      <label>Notentabelle — Darstellung</label>
+      <select id="mLayout">
+        <option value="standard" ${(m.tableLayout||'standard')!=='invers'?'selected':''}>Standard (Noten links, Gesamt rechts)</option>
+        <option value="invers" ${m.tableLayout==='invers'?'selected':''}>Invertierte Liste (Gesamt & Neuestes zuerst links)</option>
+      </select>
+      <div class="hint">Invertiert: Name · Gesamt · HA · Sonstige · Ø schriftlich + schriftliche Noten · Ø mündlich + mündliche Noten — jeweils das Neueste ganz links.</div>
+    </div>
+    <hr style="border:none;border-top:1px solid var(--line-soft);margin:16px 0">
+    <div class="field">
       <label>Datensicherung</label>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn small" id="mBackupExport">Backup mit Namen</button>
@@ -2676,6 +2713,7 @@ function openMetaSettings() {
     { label: 'Abbrechen', onClick: closeModal },
     { label: 'Speichern', cls: 'primary', onClick: () => {
       m.ferienDatum = val('mFerienDate'); m.ferienLabel = val('mFerienLabel').trim() || 'Ferien'; m.zeugnisDatum = val('mZeugnis');
+      m.tableLayout = val('mLayout') || 'standard';
       save(); closeModal(); render();
     }},
   ]);
