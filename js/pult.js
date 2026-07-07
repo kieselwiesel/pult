@@ -315,10 +315,11 @@ function courseMean(course) {
 
 /* ---------- Verlauf / Trend / Simulation ---------- */
 /* benotete Leistungen in Reihenfolge (optional halbjahrübergreifend) */
-function gradeSeries(course, sId, hyKeys) {
+function gradeSeries(course, sId, hyKeys, type) {
   const out = [];
   (hyKeys || ['1', '2']).forEach(hyKey => {
     course.halfYears[hyKey].columns.forEach(col => {
+      if (type && col.type !== type) return;
       const v = (data.grades[sId] || {})[col.id];
       if (v != null && !isNaN(v)) out.push({ hy: hyKey, type: col.type, value: v, label: col.label, date: col.date });
     });
@@ -351,7 +352,7 @@ function sparkSvg(values) {
 }
 function verlaufSvg(series, scale) {
   const n = series.length;
-  if (n < 2) return `<div class="cs-sub">Zu wenige benotete Leistungen für einen Verlauf.</div>`;
+  if (n < 2) return `<div class="cs-sub">Zu wenige mündliche Noten für einen Verlauf.</div>`;
   const W = 620, H = 200, padL = 34, padR = 12, padT = 12, padB = 26;
   const x = i => padL + i * (W - padL - padR) / (n - 1);
   const y = v => padT + (15 - v) / 15 * (H - padT - padB);
@@ -370,7 +371,7 @@ function verlaufSvg(series, scale) {
     return `<circle cx="${x(i).toFixed(1)}" cy="${y(p.value).toFixed(1)}" r="4" fill="${col}"><title>${esc(p.label)}: ${fmtGrade(p.value, scale, false)}${p.date?' ('+fmtDate(p.date)+')':''}</title></circle>`;
   }).join('');
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="xMidYMid meet" style="display:block">${grid}${boundary}${line}${dots}</svg>
-    <div class="legend" style="margin-top:6px"><span><i style="background:#3f6fb0"></i> schriftlich</span><span><i style="background:#7a63bd"></i> mündlich</span></div>`;
+    <div class="legend" style="margin-top:6px"><span><i style="background:#7a63bd"></i> mündliche Note, chronologisch</span></div>`;
 }
 /* Simulation: Gesamtnote eines Halbjahres mit einer hypothetisch ergänzten Note */
 function simulateGesamt(course, hyKey, sId, extra) {
@@ -1325,7 +1326,7 @@ function renderStudent() {
 
   const endj = effEndjahr(c, s.id);
   const endManual = endj.manual != null && endj.computed != null;
-  const series = gradeSeries(c, s.id);
+  const series = gradeSeries(c, s.id, ['1', '2'], 'muendlich');
 
   app().innerHTML = `
     <div class="page-head">
@@ -1341,7 +1342,7 @@ function renderStudent() {
     </div>
 
     <div class="calc-block">
-      <h3>Notenverlauf</h3>
+      <h3>Notenverlauf (mündlich)</h3>
       ${verlaufSvg(series, scale)}
     </div>
 
@@ -1737,7 +1738,7 @@ function renderTable(c) {
   const rows = c.students.map(s => {
     const gr = data.grades[s.id] || {};
     const comp = computeHalf(c, route.hy, s.id);
-    const sparkVals = gradeSeries(c, s.id, [route.hy]).map(p => p.value);
+    const sparkVals = gradeSeries(c, s.id, [route.hy], 'muendlich').map(p => p.value);
     const spark = sparkVals.length >= 2 ? `<div class="spark">${sparkSvg(sparkVals)}</div>` : '';
     const blind = blindSpot(c, route.hy, s.id) ? '<span class="blind-dot" title="keine aktuelle mündliche Note"></span>' : '';
     let tr = `<tr class="${studentActive(s)?'':'inactive'}"><td class="col-name"><span class="sname sname-link" data-student="${s.id}">${esc(s.firstName)} ${esc(s.lastName||'')}${blind}${s.exit?' <small>(aus)</small>':''}</span>${spark}</td>`;
