@@ -24,7 +24,27 @@ const DEFAULT_DATA = () => ({
   weightOverride: {},  // weightOverride[studentId][hyKey] = wSchriftlich(0..100)
   manual: {},          // manual[studentId] = { g1, g2, end } manuelle Note (punkte)
   kaPoints: {},        // kaPoints[studentId][columnId][taskId] = erreichte Rohpunkte
+  notes: [],           // { id, courseId, studentId|null, date, text }
+  lists: [],           // { id, courseId, title, dueDate, status:{studentId:'offen'|'abgegeben'|'befreit'} }
+  timetable: {         // Stundenplan (Mo–Fr)
+    periods: DEFAULT_PERIODS(),   // [{ label, start, end }]
+    lessons: [],       // { id, day:1..5, period:0-basiert, courseId, room }
+  },
+  todos: [],           // { id, text, done, created, due, courseId|null }
+  termine: [],         // { id, title, date, start, end, allDay, location, note, courseId|null, uid }
 });
+
+/* Standard-Stundenraster (editierbar unter „Zeiten") */
+const DEFAULT_PERIODS = () => ([
+  { label: '1.', start: '08:00', end: '08:45' },
+  { label: '2.', start: '08:45', end: '09:30' },
+  { label: '3.', start: '09:50', end: '10:35' },
+  { label: '4.', start: '10:35', end: '11:20' },
+  { label: '5.', start: '11:40', end: '12:25' },
+  { label: '6.', start: '12:25', end: '13:10' },
+  { label: '7.', start: '13:50', end: '14:35' },
+  { label: '8.', start: '14:35', end: '15:20' },
+]);
 
 /* Standard-Bewertungsbogen (Oberstufe 0–15 Punkte, Prozent-Grenzen) */
 const STANDARD_SCHEME = [
@@ -38,7 +58,7 @@ const STANDARD_SCHEME = [
   { points: 1,  minPercent: 20 }, { points: 0,  minPercent: 0 },
 ];
 
-let data = load();
+let data;   // wird am Dateiende initialisiert (nach allen const/function-Definitionen)
 
 function load() {
   try {
@@ -91,7 +111,7 @@ function seed() {
   d.meta.ferienLabel = 'Sommerferien';
   d.meta.zeugnisDatum = '2026-07-13';
 
-  buildCourse(d, {
+  const cMathe = buildCourse(d, {
     subject: 'Mathematik', className: '9b', weightWritten: 40, seed: 1907,
     columns: [
       { type: 'schriftlich', label: '1. Klassenarbeit', date: '2026-03-06' },
@@ -108,7 +128,7 @@ function seed() {
     ],
   });
 
-  buildCourse(d, {
+  const cGesch = buildCourse(d, {
     subject: 'Geschichte', className: '10a', weightWritten: 30, seed: 4711,
     columns: [
       { type: 'schriftlich', label: 'Klausur',    date: '2026-04-09' },
@@ -125,6 +145,25 @@ function seed() {
     ],
   });
 
+  // Beispiel-Stundenplan (Mo–Fr, 0-basierte Stunden)
+  const L = (day, period, courseId, room) => ({ id: uid(), day, period, courseId, room });
+  d.timetable.lessons = [
+    L(1, 0, cMathe.id, 'A103'), L(1, 1, cMathe.id, 'A103'), L(1, 3, cGesch.id, 'B201'),
+    L(2, 2, cGesch.id, 'B201'), L(2, 4, cMathe.id, 'A103'),
+    L(3, 0, cGesch.id, 'B201'), L(3, 1, cGesch.id, 'B201'),
+    L(4, 2, cMathe.id, 'A103'), L(4, 3, cMathe.id, 'A103'),
+    L(5, 1, cGesch.id, 'B201'),
+  ];
+
+  // Beispiel-Todo und -Termin
+  d.todos = [
+    { id: uid(), text: 'Klausuren 9b korrigieren', done: false, created: todayISO(), due: '', courseId: cMathe.id },
+    { id: uid(), text: 'Kopien für Referate machen', done: false, created: todayISO(), due: '', courseId: null },
+  ];
+  d.termine = [
+    { id: uid(), title: 'Elternsprechtag', date: d.meta.zeugnisDatum || '2026-07-13', start: '16:00', end: '19:00', allDay: false, location: 'Aula', note: '', courseId: null, uid: uid() + '@pult' },
+  ];
+
   try { localStorage.setItem(STORE_KEY, JSON.stringify(d)); } catch (e) {}
   return d;
 }
@@ -136,6 +175,7 @@ function newCourse(subject, className) {
     scale: 'punkte',                  // 'punkte' (0–15) | 'noten' (1–6 mit Tendenz)
     weightWritten: 40, weightOral: 60,
     weightHY1: 30, weightHY2: 70,     // Endjahresnote
+    haLog: [],                        // Hausaufgaben-Protokoll: [{id,date,mode:'nicht'|'gemacht',marks:{sId:true}}]
     students: [],
     halfYears: {
       '1': { columns: [], sonstige: [] },
@@ -165,18 +205,20 @@ function pointsToNoteDecimal(pts) {
   if (pts == null || isNaN(pts)) return null;
   return clamp((17 - pts) / 3, 1, 6);
 }
+/* Einzel-Notenpunkt immer zweistellig: 00–15 (klare Abgrenzung zum 1–6-System) */
+function pad2(p) { return String(clamp(Math.round(p), 0, 15)).padStart(2, '0'); }
 /* Skalenabhängige Anzeige eines Punktwerts.
-   scale: 'punkte' | 'noten'; avg=true → Kommawert, sonst diskrete Note/Punkt. */
+   scale: 'punkte' | 'noten'; avg=true → Kommawert (ohne führende Null), sonst diskrete Note/Punkt. */
 function fmtGrade(pts, scale, avg) {
   if (pts == null || isNaN(pts)) return '–';
   if (scale === 'noten') return avg ? fmtNum(pointsToNoteDecimal(pts)) : (NOTE_MAP[clamp(Math.round(pts), 0, 15)] ?? '–');
-  return avg ? fmtNum(pts) : String(Math.round(pts));
+  return avg ? fmtNum(pts) : pad2(pts);
 }
 /* <option>-Liste für manuelle Note-Auswahl (Wert = Punkte 0–15) */
 function manualOptions(scale, current) {
   let out = `<option value="">— berechnet verwenden —</option>`;
   for (let p = 15; p >= 0; p--) {
-    const lbl = scale === 'noten' ? `${NOTE_MAP[p]}  (${p} P.)` : `${p} Pkt  ·  ${NOTE_MAP[p]}`;
+    const lbl = scale === 'noten' ? `${NOTE_MAP[p]}  (${pad2(p)} P.)` : `${pad2(p)} Pkt  ·  ${NOTE_MAP[p]}`;
     out += `<option value="${p}" ${current === p ? 'selected' : ''}>${lbl}</option>`;
   }
   return out;
@@ -351,10 +393,32 @@ function simulateGesamt(course, hyKey, sId, extra) {
 function targetOptions(scale, current) {
   let out = '';
   for (let p = 15; p >= 0; p--) {
-    const lbl = scale === 'noten' ? `${NOTE_MAP[p]}  (${p} P.)` : `${p} Pkt  ·  ${NOTE_MAP[p]}`;
+    const lbl = scale === 'noten' ? `${NOTE_MAP[p]}  (${pad2(p)} P.)` : `${pad2(p)} Pkt  ·  ${NOTE_MAP[p]}`;
     out += `<option value="${p}" ${current === p ? 'selected' : ''}>${lbl}</option>`;
   }
   return out;
+}
+/* Blinde Flecken: keine (aktuelle) mündliche Note */
+const BLIND_DAYS = 21;
+function blindSpot(course, hyKey, sId) {
+  const cols = course.halfYears[hyKey].columns.filter(c => c.type === 'muendlich');
+  const graded = cols.filter(c => (data.grades[sId] || {})[c.id] != null);
+  if (!graded.length) return true;
+  const dated = graded.filter(c => c.date).map(c => c.date).sort();
+  if (!dated.length) return false;               // benotet aber undatiert -> nicht flaggen
+  return daysSince(dated[dated.length - 1]) > BLIND_DAYS;
+}
+/* Hausaufgaben: Zählung aus dem Protokoll (course.haLog).
+   mode 'nicht' (Malus-Erhebung): markiert = nicht gemacht, Rest = gemacht.
+   mode 'gemacht' (Bonus-Erhebung): markiert = gemacht, Rest = neutral. */
+function haCounts(course, sId) {
+  let gemacht = 0, nicht = 0;
+  (course.haLog || []).forEach(sess => {
+    const marked = !!(sess.marks && sess.marks[sId]);
+    if (sess.mode === 'nicht') { if (marked) nicht++; else gemacht++; }
+    else if (marked) gemacht++;
+  });
+  return { gemacht, nicht };
 }
 
 /* ---------- Klassenarbeit ---------- */
@@ -409,6 +473,147 @@ function daysSince(iso) {
   return Math.round((today - new Date(iso + 'T00:00:00')) / 86400000);
 }
 
+/* ============================================================
+   Phase 6 — Planung: Stundenplan, Todos, Termine (ICS)
+   ============================================================ */
+const WEEKDAYS      = ['', 'Mo', 'Di', 'Mi', 'Do', 'Fr'];
+const WEEKDAYS_LONG = ['', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag'];
+/* heutiger Wochentag als 1..5 (Mo–Fr), 0 am Wochenende */
+function todayWeekday() { const d = new Date().getDay(); return d >= 1 && d <= 5 ? d : 0; }
+/* Montag der Woche, in der iso liegt (Default: heute) */
+function mondayOf(iso) {
+  const d = iso ? new Date(iso + 'T00:00:00') : new Date();
+  d.setHours(0, 0, 0, 0);
+  const off = (d.getDay() + 6) % 7;   // Mo=0 … So=6
+  d.setDate(d.getDate() - off);
+  return d;
+}
+function dateToISO(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+/* ISO-Datum + Wochentag 1..5 → Datum dieses Tages in der Woche von baseMonday */
+function isoForWeekday(baseMonday, wd) { const d = new Date(baseMonday); d.setDate(d.getDate() + (wd - 1)); return dateToISO(d); }
+
+/* stabile, dezente Farbe je Kurs (Index-basiert) fürs Stundenplan-Raster */
+const COURSE_COLORS = [
+  { bg: '#e7eef7', fg: '#2b4d73', bar: '#6d94c4' },
+  { bg: '#f3eef8', fg: '#4a3d73', bar: '#8f7cc4' },
+  { bg: '#e6f2ec', fg: '#1f5a44', bar: '#3f9a76' },
+  { bg: '#faf1e6', fg: '#8a5a1e', bar: '#c49356' },
+  { bg: '#f7eaef', fg: '#7a2f4e', bar: '#bd6f8c' },
+  { bg: '#eef2f5', fg: '#40505f', bar: '#7d8fa0' },
+  { bg: '#eaf5ec', fg: '#2f6a3a', bar: '#5aa86a' },
+  { bg: '#f3f1e6', fg: '#5c5720', bar: '#a89f5a' },
+];
+function courseColor(courseId) {
+  const i = data.courses.findIndex(c => c.id === courseId);
+  return COURSE_COLORS[(i < 0 ? 0 : i) % COURSE_COLORS.length];
+}
+function lessonAt(day, period) { return (data.timetable.lessons || []).find(l => l.day === day && l.period === period); }
+
+/* ---------- Termine: Sortierung & Filter ---------- */
+function termineSorted() {
+  return (data.termine || []).slice().sort((a, b) =>
+    (a.date || '').localeCompare(b.date || '') || (a.start || '').localeCompare(b.start || ''));
+}
+function upcomingTermine(limit) {
+  const today = todayISO();
+  const list = termineSorted().filter(t => (t.date || '') >= today);
+  return limit ? list.slice(0, limit) : list;
+}
+function fmtTerminWhen(t) {
+  if (!t.date) return '';
+  const day = fmtDateLong(t.date);
+  if (t.allDay || !t.start) return day + ' · ganztägig';
+  return day + ' · ' + t.start + (t.end ? '–' + t.end : '') + ' Uhr';
+}
+
+/* ---------- ICS (iCalendar) Import/Export ---------- */
+function icsUnfold(text) {
+  const raw = text.split(/\r?\n/);
+  const out = [];
+  raw.forEach(line => {
+    if (/^[ \t]/.test(line) && out.length) out[out.length - 1] += line.slice(1);
+    else out.push(line);
+  });
+  return out;
+}
+function icsUnescape(v) { return String(v).replace(/\\n/gi, '\n').replace(/\\,/g, ',').replace(/\\;/g, ';').replace(/\\\\/g, '\\'); }
+function icsEscape(v) { return String(v ?? '').replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/,/g, '\\,').replace(/;/g, '\\;'); }
+function parseICSDate(value, params) {
+  const v = value.trim();
+  const isDate = params.some(p => /VALUE=DATE\b/i.test(p)) || /^\d{8}$/.test(v);
+  const y = v.slice(0, 4), mo = v.slice(4, 6), d = v.slice(6, 8);
+  if (isDate) return { date: `${y}-${mo}-${d}`, time: '', allDay: true };
+  let hh = v.slice(9, 11), mi = v.slice(11, 13);
+  if (/Z$/.test(v)) {                                   // UTC → lokale Zeit
+    const dt = new Date(Date.UTC(+y, +mo - 1, +d, +hh, +mi));
+    return { date: dateToISO(dt), time: `${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`, allDay: false };
+  }
+  return { date: `${y}-${mo}-${d}`, time: `${hh}:${mi}`, allDay: false };
+}
+function parseICS(text) {
+  const lines = icsUnfold(text);
+  const events = [];
+  let cur = null;
+  lines.forEach(line => {
+    const t = line.trim();
+    if (t === 'BEGIN:VEVENT') { cur = { allDay: false }; return; }
+    if (t === 'END:VEVENT') { if (cur && (cur.title || cur.date)) events.push(cur); cur = null; return; }
+    if (!cur) return;
+    const idx = line.indexOf(':'); if (idx < 0) return;
+    const left = line.slice(0, idx), value = line.slice(idx + 1);
+    const parts = left.split(';');
+    const name = parts[0].toUpperCase(), params = parts.slice(1);
+    if (name === 'SUMMARY') cur.title = icsUnescape(value);
+    else if (name === 'LOCATION') cur.location = icsUnescape(value);
+    else if (name === 'DESCRIPTION') cur.note = icsUnescape(value);
+    else if (name === 'UID') cur.uid = value.trim();
+    else if (name === 'DTSTART') { const p = parseICSDate(value, params); cur.date = p.date; cur.start = p.time; cur.allDay = p.allDay; }
+    else if (name === 'DTEND') { const p = parseICSDate(value, params); cur.end = p.time; }
+  });
+  return events;
+}
+function importICS(text) {
+  let parsed;
+  try { parsed = parseICS(text); } catch (e) { parsed = []; }
+  if (!parsed.length) { toast('Keine Termine in der Datei gefunden.'); return; }
+  let added = 0, skipped = 0;
+  parsed.forEach(ev => {
+    if (ev.uid && data.termine.some(t => t.uid === ev.uid)) { skipped++; return; }
+    data.termine.push({
+      id: uid(), title: ev.title || 'Termin', date: ev.date || todayISO(),
+      start: ev.start || '', end: ev.end || '', allDay: !!ev.allDay,
+      location: ev.location || '', note: ev.note || '', courseId: null,
+      uid: ev.uid || (uid() + '@pult'),
+    });
+    added++;
+  });
+  save();
+  toast(`${added} Termin(e) importiert${skipped ? `, ${skipped} Duplikat(e) übersprungen` : ''}.`);
+}
+function icsStamp(date, time) { return `${(date||'').replace(/-/g,'')}T${(time||'00:00').replace(':','')}00`; }
+function exportICS() {
+  const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Pult//Termine//DE', 'CALSCALE:GREGORIAN'];
+  termineSorted().forEach(t => {
+    lines.push('BEGIN:VEVENT');
+    lines.push('UID:' + (t.uid || (t.id + '@pult')));
+    lines.push('DTSTAMP:' + icsStamp(todayISO(), '00:00'));
+    lines.push('SUMMARY:' + icsEscape(t.title));
+    if (t.allDay || !t.start) lines.push('DTSTART;VALUE=DATE:' + (t.date || '').replace(/-/g, ''));
+    else { lines.push('DTSTART:' + icsStamp(t.date, t.start)); if (t.end) lines.push('DTEND:' + icsStamp(t.date, t.end)); }
+    if (t.location) lines.push('LOCATION:' + icsEscape(t.location));
+    if (t.note) lines.push('DESCRIPTION:' + icsEscape(t.note));
+    lines.push('END:VEVENT');
+  });
+  lines.push('END:VCALENDAR');
+  const blob = new Blob([lines.join('\r\n')], { type: 'text/calendar' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `pult-termine-${todayISO()}.ics`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  toast('Termine als ICS exportiert.');
+}
+
 /* ---------- Backup (JSON export / import) ---------- */
 function exportBackup() {
   data.meta.lastBackup = todayISO();
@@ -454,18 +659,41 @@ function render() {
   renderCrumbs();
   renderTopbarRight();
   if (route.name === 'ka') return renderKA();
+  if (route.name === 'ha') return renderHaPage();
   if (route.name === 'student') return renderStudent();
   if (route.name === 'course') return renderCourse();
+  if (route.name === 'courses') return renderCourses();
+  if (route.name === 'todos') return renderTodos();
+  if (route.name === 'termine') return renderTermine();
   return renderHome();
+}
+/* gemeinsame Reiter-Navigation der Planungs-Seiten */
+const TOP_PAGES = [
+  { name: 'home', label: 'Stundenplan' },
+  { name: 'courses', label: 'Kurse' },
+  { name: 'todos', label: 'Todos' },
+  { name: 'termine', label: 'Termine' },
+];
+function mainNav(active) {
+  const openCount = (data.todos || []).filter(t => !t.done).length;
+  return `<nav class="mainnav">${TOP_PAGES.map(p => {
+    const badge = p.name === 'todos' && openCount ? `<span class="nav-badge">${openCount}</span>` : '';
+    return `<button class="mn ${p.name === active ? 'active' : ''}" data-nav="${p.name}">${p.label}${badge}</button>`;
+  }).join('')}</nav>`;
+}
+function bindMainNav() {
+  document.querySelectorAll('.mainnav .mn').forEach(b => b.onclick = () => go({ name: b.dataset.nav }));
 }
 function renderCrumbs() {
   const el = document.getElementById('crumbs');
-  if (route.name === 'home') { el.innerHTML = `<span class="here">Kurse</span>`; return; }
+  const top = TOP_PAGES.find(p => p.name === route.name);
+  if (top) { el.innerHTML = `<span class="here">${top.label}</span>`; return; }
   const c = getCourse(route.courseId);
   const base = c ? c.subject + ' · ' + c.className : '';
-  if (route.name === 'ka' || route.name === 'student') {
+  if (route.name === 'ka' || route.name === 'student' || route.name === 'ha') {
     let leaf = 'Klassenarbeit';
     if (route.name === 'ka') { const col = findKaColumn(c); leaf = col ? col.label : 'Klassenarbeit'; }
+    else if (route.name === 'ha') leaf = 'Hausaufgaben';
     else { const s = c && c.students.find(x => x.id === route.studentId); leaf = s ? `${s.firstName} ${s.lastName||''}` : 'Schüler:in'; }
     el.innerHTML = `<a class="here" id="crumbCourse" style="cursor:pointer;color:#bfdad4">${esc(base)}</a><span class="sep">›</span><span class="here">${esc(leaf)}</span>`;
     const cc = document.getElementById('crumbCourse'); if (cc) cc.onclick = () => go({ name: 'course', courseId: c.id });
@@ -475,15 +703,15 @@ function renderCrumbs() {
 }
 function renderTopbarRight() {
   const el = document.getElementById('topbarRight');
-  if (route.name === 'home') {
-    el.innerHTML = `<button class="btn ghost small" id="btnSettings">Termine</button>`;
+  if (TOP_PAGES.some(p => p.name === route.name)) {
+    el.innerHTML = `<button class="btn ghost small" id="btnSettings">Einstellungen</button>`;
     document.getElementById('btnSettings').onclick = openMetaSettings;
-  } else if (route.name === 'ka' || route.name === 'student') {
+  } else if (route.name === 'ka' || route.name === 'student' || route.name === 'ha') {
     el.innerHTML = `<button class="btn ghost small" id="btnBack">‹ Kurs</button>`;
     document.getElementById('btnBack').onclick = () => go({ name: 'course', courseId: route.courseId });
   } else {
     el.innerHTML = `<button class="btn ghost small" id="btnBack">‹ Kurse</button>`;
-    document.getElementById('btnBack').onclick = () => go({ name: 'home' });
+    document.getElementById('btnBack').onclick = () => go({ name: 'courses' });
   }
 }
 function findKaColumn(c) {
@@ -491,49 +719,27 @@ function findKaColumn(c) {
   return c.halfYears[route.hy].columns.find(x => x.id === route.columnId && x.ka);
 }
 
-/* ---------- Home / Dashboard ---------- */
-function renderHome() {
-  const ferien = weeksUntil(data.meta.ferienDatum);
-  const zeugnis = weeksUntil(data.meta.zeugnisDatum);
+/* ---------- Kurse (Übersicht) ---------- */
+function renderCourses() {
   const studCount = data.courses.reduce((a, c) => a + c.students.length, 0);
   const backupOverdue = data.courses.length && (!data.meta.lastBackup || daysSince(data.meta.lastBackup) > 7);
-  const weekTile = (w, label, dateIso) => {
-    if (!w) return `<div class="value">–</div><div class="foot">Datum festlegen ›</div>`;
-    const txt = w.days < 0 ? 'vorbei' : (w.weeks <= 0 ? `<1<small> Woche</small>` : `${w.weeks}<small> Wochen</small>`);
-    return `<div class="value">${txt}</div><div class="foot">${fmtDateLong(dateIso)}</div>`;
-  };
 
   app().innerHTML = `
+    ${mainNav('courses')}
     ${backupOverdue ? `<div class="notice" id="backupNote" style="display:flex;justify-content:space-between;align-items:center;gap:12px;border-color:var(--amber)">
       <span>${data.meta.lastBackup ? 'Letztes Backup: '+fmtDateLong(data.meta.lastBackup)+'.' : 'Noch kein Backup erstellt.'} Sichere deine Daten regelmäßig.</span>
       <button class="btn small" id="backupNow">Backup jetzt</button></div>` : ''}
-    <section class="dash">
-      <div class="dash-card clickable" id="dashFerien">
-        <div class="label">${esc(data.meta.ferienLabel || 'Nächste Ferien')}</div>
-        ${weekTile(ferien, '', data.meta.ferienDatum)}
-      </div>
-      <div class="dash-card clickable" id="dashZeugnis">
-        <div class="label">Zeugniskonferenz</div>
-        ${weekTile(zeugnis, '', data.meta.zeugnisDatum)}
-      </div>
-      <div class="dash-card">
-        <div class="label">Kurse</div>
-        <div class="value">${data.courses.length}</div>
-        <div class="foot">${studCount} Schüler:innen insgesamt</div>
-      </div>
-    </section>
 
     <div class="page-head">
-      <div><h1>Kurse</h1><div class="sub">Fach- / Klassenkombinationen</div></div>
+      <div><h1>Kurse</h1><div class="sub">${data.courses.length} Kurse · ${studCount} Schüler:innen insgesamt</div></div>
       <button class="btn primary" id="btnNewCourse">+ Neuer Kurs</button>
     </div>
 
     <div class="course-grid" id="courseGrid"></div>
   `;
 
+  bindMainNav();
   document.getElementById('btnNewCourse').onclick = () => openCourseForm();
-  document.getElementById('dashFerien').onclick = openMetaSettings;
-  document.getElementById('dashZeugnis').onclick = openMetaSettings;
   const bn = document.getElementById('backupNow'); if (bn) bn.onclick = exportBackup;
 
   const grid = document.getElementById('courseGrid');
@@ -564,6 +770,341 @@ function renderHome() {
   grid.appendChild(add);
 }
 
+/* ============================================================
+   Startseite — Stundenplan + „Heute"
+   ============================================================ */
+let planEdit = false;   // Stundenplan-Bearbeitungsmodus
+
+function renderHome() {
+  const monday = mondayOf();
+  const wdToday = todayWeekday();
+  const periods = data.timetable.periods || [];
+  const ferien = weeksUntil(data.meta.ferienDatum);
+  const zeugnis = weeksUntil(data.meta.zeugnisDatum);
+  const openTodos = (data.todos || []).filter(t => !t.done).length;
+  const nextTermin = upcomingTermine(1)[0];
+
+  const weekTile = (w, dateIso) => {
+    if (!w) return `<div class="value">–</div><div class="foot">Datum festlegen ›</div>`;
+    const txt = w.days < 0 ? 'vorbei' : (w.weeks <= 0 ? `<1<small> Woche</small>` : `${w.weeks}<small> Wochen</small>`);
+    return `<div class="value">${txt}</div><div class="foot">${fmtDateLong(dateIso)}</div>`;
+  };
+
+  // Kopfzeile mit Wochentagen + Datum dieser Woche
+  const headDays = WEEKDAYS.slice(1).map((wd, i) => {
+    const day = i + 1;
+    const iso = isoForWeekday(monday, day);
+    const isToday = day === wdToday;
+    return `<th class="tt-day ${isToday ? 'tt-today' : ''}"><span class="tt-wd">${wd}</span><span class="tt-date">${fmtDate(iso)}</span></th>`;
+  }).join('');
+
+  const bodyRows = periods.map((p, pi) => {
+    const cells = [1, 2, 3, 4, 5].map(day => {
+      const isToday = day === wdToday;
+      const l = lessonAt(day, pi);
+      if (l) {
+        const c = getCourse(l.courseId);
+        const col = courseColor(l.courseId);
+        const label = c ? `${esc(c.subject)}` : '<span class="tt-missing">entfernt</span>';
+        const sub = c ? `${esc(c.className)}${l.room ? ' · ' + esc(l.room) : ''}` : '';
+        return `<td class="tt-cell ${isToday ? 'tt-today' : ''}">
+          <button class="tt-lesson" data-day="${day}" data-period="${pi}" style="background:${col.bg};color:${col.fg};border-left-color:${col.bar}">
+            <span class="tt-subject">${label}</span><span class="tt-meta">${sub}</span></button></td>`;
+      }
+      return `<td class="tt-cell ${isToday ? 'tt-today' : ''} ${planEdit ? 'tt-editable' : ''}">
+        ${planEdit ? `<button class="tt-add" data-day="${day}" data-period="${pi}">+</button>` : ''}</td>`;
+    }).join('');
+    return `<tr>
+      <th class="tt-period"><span class="tt-pl">${esc(p.label)}</span><span class="tt-pt">${p.start || ''}</span></th>
+      ${cells}</tr>`;
+  }).join('');
+
+  const hasLessons = (data.timetable.lessons || []).length > 0;
+  const todayLabel = wdToday ? WEEKDAYS_LONG[wdToday] + ', ' + fmtDateLong(todayISO()) : 'Wochenende — ' + fmtDateLong(todayISO());
+
+  app().innerHTML = `
+    ${mainNav('home')}
+    <section class="dash">
+      <div class="dash-card clickable" id="dashFerien">
+        <div class="label">${esc(data.meta.ferienLabel || 'Nächste Ferien')}</div>${weekTile(ferien, data.meta.ferienDatum)}
+      </div>
+      <div class="dash-card clickable" id="dashZeugnis">
+        <div class="label">Zeugniskonferenz</div>${weekTile(zeugnis, data.meta.zeugnisDatum)}
+      </div>
+      <div class="dash-card clickable" id="dashTodos">
+        <div class="label">Offene Todos</div>
+        <div class="value">${openTodos}</div><div class="foot">${openTodos ? 'ansehen ›' : 'alles erledigt'}</div>
+      </div>
+      <div class="dash-card clickable" id="dashTermin">
+        <div class="label">Nächster Termin</div>
+        ${nextTermin ? `<div class="value" style="font-size:20px">${esc(nextTermin.title)}</div><div class="foot">${fmtTerminWhen(nextTermin)}</div>`
+          : `<div class="value">–</div><div class="foot">Termin anlegen ›</div>`}
+      </div>
+    </section>
+
+    <div class="page-head">
+      <div><h1>Stundenplan</h1><div class="sub">${todayLabel}</div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn small" id="btnPeriods">Zeiten</button>
+        <button class="btn small ${planEdit ? 'primary' : ''}" id="btnPlanEdit">${planEdit ? 'Fertig' : 'Plan bearbeiten'}</button>
+      </div>
+    </div>
+
+    ${!data.courses.length ? `<div class="notice">Noch keine Kurse angelegt. Lege zuerst unter <b>Kurse</b> Kurse an, dann kannst du sie hier in den Stundenplan eintragen.</div>` : ''}
+    ${planEdit ? `<div class="notice">Tippe auf ein Feld, um einen Kurs einzutragen oder zu ändern.</div>`
+      : (hasLessons ? '' : `<div class="notice">Noch keine Stunden eingetragen. Tippe auf <b>Plan bearbeiten</b> und fülle das Raster.</div>`)}
+
+    <div class="tt-wrap">
+      <table class="tt">
+        <thead><tr><th class="tt-corner">Std.</th>${headDays}</tr></thead>
+        <tbody>${bodyRows}</tbody>
+      </table>
+    </div>
+  `;
+
+  bindMainNav();
+  document.getElementById('dashFerien').onclick = openMetaSettings;
+  document.getElementById('dashZeugnis').onclick = openMetaSettings;
+  document.getElementById('dashTodos').onclick = () => go({ name: 'todos' });
+  document.getElementById('dashTermin').onclick = () => go({ name: 'termine' });
+  document.getElementById('btnPeriods').onclick = openPeriodsEditor;
+  document.getElementById('btnPlanEdit').onclick = () => { planEdit = !planEdit; renderHome(); };
+
+  app().querySelectorAll('.tt-lesson').forEach(b => b.onclick = () => {
+    const day = +b.dataset.day, period = +b.dataset.period;
+    if (planEdit) return openLessonEditor(day, period);
+    const l = lessonAt(day, period);
+    if (l && getCourse(l.courseId)) go({ name: 'course', courseId: l.courseId, hy: '1', view: 'gesamt' });
+    else openLessonEditor(day, period);
+  });
+  app().querySelectorAll('.tt-add').forEach(b => b.onclick = () => openLessonEditor(+b.dataset.day, +b.dataset.period));
+}
+
+function openLessonEditor(day, period) {
+  const existing = lessonAt(day, period);
+  const p = data.timetable.periods[period];
+  const opts = `<option value="">— frei —</option>` + data.courses.map(c =>
+    `<option value="${c.id}" ${existing && existing.courseId === c.id ? 'selected' : ''}>${esc(c.subject)} · ${esc(c.className)}</option>`).join('');
+  modal(`${WEEKDAYS_LONG[day]} · ${p ? esc(p.label) + ' Stunde' : period + 1 + '. Stunde'}`, `
+    ${data.courses.length ? '' : '<div class="notice">Noch keine Kurse vorhanden — lege zuerst einen Kurs an.</div>'}
+    <div class="field"><label>Kurs</label><select id="leCourse">${opts}</select></div>
+    <div class="field"><label>Raum (optional)</label><input id="leRoom" type="text" value="${esc(existing ? existing.room || '' : '')}" placeholder="z. B. A103"></div>
+  `, [
+    ...(existing ? [{ label: 'Entfernen', cls: 'danger', onClick: () => {
+      data.timetable.lessons = data.timetable.lessons.filter(l => l !== existing);
+      save(); closeModal(); renderHome();
+    }}] : []),
+    { label: 'Abbrechen', onClick: closeModal },
+    { label: 'Speichern', cls: 'primary', onClick: () => {
+      const courseId = val('leCourse'), room = val('leRoom').trim();
+      if (!courseId) {
+        if (existing) data.timetable.lessons = data.timetable.lessons.filter(l => l !== existing);
+      } else if (existing) { existing.courseId = courseId; existing.room = room; }
+      else data.timetable.lessons.push({ id: uid(), day, period, courseId, room });
+      save(); closeModal(); renderHome();
+    }},
+  ]);
+}
+
+function openPeriodsEditor() {
+  const rows = () => data.timetable.periods.map((p, i) => `
+    <div class="period-row" data-i="${i}">
+      <input type="text" class="pr-label" value="${esc(p.label)}" placeholder="Std.">
+      <input type="time" class="pr-start" value="${p.start || ''}">
+      <input type="time" class="pr-end" value="${p.end || ''}">
+      <button class="btn small danger pr-del">×</button>
+    </div>`).join('');
+  const flush = () => {
+    document.querySelectorAll('.period-row').forEach(row => {
+      const i = +row.dataset.i;
+      if (!data.timetable.periods[i]) return;
+      data.timetable.periods[i].label = row.querySelector('.pr-label').value;
+      data.timetable.periods[i].start = row.querySelector('.pr-start').value;
+      data.timetable.periods[i].end = row.querySelector('.pr-end').value;
+    });
+  };
+  modal('Stundenzeiten', `
+    <div class="scheme-head" style="grid-template-columns:1fr 1fr 1fr 44px"><span>Bezeichnung</span><span>Beginn</span><span>Ende</span><span></span></div>
+    <div id="periodList">${rows()}</div>
+    <button class="btn small" id="prAdd" style="margin-top:10px">+ Stunde</button>
+  `, [
+    { label: 'Abbrechen', onClick: closeModal },
+    { label: 'Speichern', cls: 'primary', onClick: () => { flush(); save(); closeModal(); renderHome(); } },
+  ]);
+  const rebind = () => {
+    document.querySelectorAll('.pr-del').forEach(b => b.onclick = () => {
+      const i = +b.closest('.period-row').dataset.i;
+      flush();
+      data.timetable.periods.splice(i, 1);
+      // Stunden neu ausrichten: alles ab i rutscht eine hoch, i selbst fällt weg
+      data.timetable.lessons = data.timetable.lessons.filter(l => l.period !== i);
+      data.timetable.lessons.forEach(l => { if (l.period > i) l.period--; });
+      document.getElementById('periodList').innerHTML = rows();
+      rebind();
+    });
+  };
+  document.getElementById('prAdd').onclick = () => {
+    flush();
+    data.timetable.periods.push({ label: (data.timetable.periods.length + 1) + '.', start: '', end: '' });
+    document.getElementById('periodList').innerHTML = rows();
+    rebind();
+  };
+  rebind();
+}
+
+/* ============================================================
+   Todos
+   ============================================================ */
+function renderTodos() {
+  const courseOpt = (sel) => `<option value="">Kein Kurs</option>` + data.courses.map(c =>
+    `<option value="${c.id}" ${sel === c.id ? 'selected' : ''}>${esc(c.subject)} · ${esc(c.className)}</option>`).join('');
+
+  const sorted = (data.todos || []).slice().sort((a, b) => {
+    if (a.done !== b.done) return a.done ? 1 : -1;
+    const ad = a.due || '9999', bd = b.due || '9999';
+    if (ad !== bd) return ad.localeCompare(bd);
+    return (a.created || '').localeCompare(b.created || '');
+  });
+
+  const item = (t) => {
+    const c = t.courseId ? getCourse(t.courseId) : null;
+    const overdue = !t.done && t.due && t.due < todayISO();
+    const meta = [c ? `${esc(c.subject)} ${esc(c.className)}` : '', t.due ? (overdue ? 'überfällig ' : 'fällig ') + fmtDateLong(t.due) : ''].filter(Boolean).join(' · ');
+    return `<div class="todo ${t.done ? 'done' : ''}" data-id="${t.id}">
+      <button class="todo-check ${t.done ? 'on' : ''}" data-check="${t.id}" aria-label="erledigt"></button>
+      <div class="todo-main"><span class="todo-text">${esc(t.text)}</span>${meta ? `<span class="todo-meta ${overdue ? 'over' : ''}">${meta}</span>` : ''}</div>
+      <button class="btn small danger" data-del="${t.id}">Löschen</button>
+    </div>`;
+  };
+  const openList = sorted.filter(t => !t.done).map(item).join('') || `<div class="notice">Keine offenen Todos. Trag oben etwas ein.</div>`;
+  const doneList = sorted.filter(t => t.done);
+
+  app().innerHTML = `
+    ${mainNav('todos')}
+    <div class="page-head"><div><h1>Todos</h1><div class="sub">Notizen und Aufgaben, unabhängig von Noten</div></div></div>
+
+    <div class="calc-block">
+      <div class="todo-add">
+        <input id="tdText" type="text" placeholder="Neues Todo … (Enter)">
+        <input id="tdDue" type="date" title="Fällig (optional)">
+        <select id="tdCourse">${courseOpt('')}</select>
+        <button class="btn primary" id="tdAdd">Hinzufügen</button>
+      </div>
+    </div>
+
+    <div class="todo-list">${openList}</div>
+
+    ${doneList.length ? `<div class="page-head" style="margin-top:22px"><div><h1 style="font-size:18px">Erledigt (${doneList.length})</h1></div>
+      <button class="btn small" id="tdClearDone">Erledigte löschen</button></div>
+      <div class="todo-list">${doneList.map(item).join('')}</div>` : ''}
+  `;
+
+  bindMainNav();
+  const addTodo = () => {
+    const text = val('tdText').trim();
+    if (!text) return toast('Bitte einen Text eingeben.');
+    data.todos.push({ id: uid(), text, done: false, created: todayISO(), due: val('tdDue'), courseId: val('tdCourse') || null });
+    save(); renderTodos();
+  };
+  document.getElementById('tdAdd').onclick = addTodo;
+  document.getElementById('tdText').addEventListener('keydown', e => { if (e.key === 'Enter') addTodo(); });
+  app().querySelectorAll('[data-check]').forEach(b => b.onclick = () => {
+    const t = data.todos.find(x => x.id === b.dataset.check); if (t) { t.done = !t.done; save(); renderTodos(); }
+  });
+  app().querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
+    data.todos = data.todos.filter(x => x.id !== b.dataset.del); save(); renderTodos();
+  });
+  const cd = document.getElementById('tdClearDone');
+  if (cd) cd.onclick = () => { data.todos = data.todos.filter(t => !t.done); save(); renderTodos(); };
+}
+
+/* ============================================================
+   Termine (+ ICS)
+   ============================================================ */
+function renderTermine() {
+  const today = todayISO();
+  const all = termineSorted();
+  const upcoming = all.filter(t => (t.date || '') >= today);
+  const past = all.filter(t => (t.date || '') < today).reverse();
+
+  const item = (t) => {
+    const c = t.courseId ? getCourse(t.courseId) : null;
+    const meta = [fmtTerminWhen(t), t.location ? esc(t.location) : '', c ? `${esc(c.subject)} ${esc(c.className)}` : ''].filter(Boolean).join(' · ');
+    return `<div class="chip termin" data-id="${t.id}">
+      <div class="chip-main"><b>${esc(t.title)}</b><span>${meta}</span>${t.note ? `<span class="termin-note">${esc(t.note)}</span>` : ''}</div>
+      <button class="btn small" data-edit="${t.id}">Ändern</button>
+    </div>`;
+  };
+
+  app().innerHTML = `
+    ${mainNav('termine')}
+    <div class="page-head">
+      <div><h1>Termine</h1><div class="sub">${upcoming.length} anstehend</div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn small" id="tmImport">ICS importieren</button>
+        <button class="btn small" id="tmExport">ICS exportieren</button>
+        <button class="btn primary small" id="tmAdd">+ Termin</button>
+        <input type="file" id="tmFile" accept=".ics,text/calendar" hidden>
+      </div>
+    </div>
+
+    <div class="chip-list">${upcoming.map(item).join('') || `<div class="notice">Keine anstehenden Termine. Lege einen an oder importiere eine ICS-Datei.</div>`}</div>
+
+    ${past.length ? `<div class="page-head" style="margin-top:22px"><div><h1 style="font-size:18px">Vergangen (${past.length})</h1></div></div>
+      <div class="chip-list">${past.map(item).join('')}</div>` : ''}
+  `;
+
+  bindMainNav();
+  document.getElementById('tmAdd').onclick = () => openTerminForm();
+  document.getElementById('tmExport').onclick = () => { if (!data.termine.length) return toast('Keine Termine zum Exportieren.'); exportICS(); };
+  const file = document.getElementById('tmFile');
+  document.getElementById('tmImport').onclick = () => file.click();
+  file.onchange = () => { if (file.files[0]) readFileSmart(file.files[0], text => { importICS(text); renderTermine(); }); };
+  app().querySelectorAll('[data-edit]').forEach(b => b.onclick = () => openTerminForm(b.dataset.edit));
+}
+
+function openTerminForm(id) {
+  const editing = !!id;
+  const t = editing ? data.termine.find(x => x.id === id) : { title: '', date: todayISO(), start: '', end: '', allDay: false, location: '', note: '', courseId: null };
+  const courseOpt = `<option value="">Kein Kurs</option>` + data.courses.map(c =>
+    `<option value="${c.id}" ${t.courseId === c.id ? 'selected' : ''}>${esc(c.subject)} · ${esc(c.className)}</option>`).join('');
+  modal(editing ? 'Termin bearbeiten' : 'Neuer Termin', `
+    <div class="field"><label>Titel *</label><input id="tmTitle" type="text" value="${esc(t.title)}" placeholder="z. B. Konferenz"></div>
+    <div class="row2">
+      <div class="field"><label>Datum</label><input id="tmDate" type="date" value="${t.date || ''}"></div>
+      <div class="field"><label>Ort (optional)</label><input id="tmLoc" type="text" value="${esc(t.location || '')}"></div>
+    </div>
+    <div class="field"><label><input id="tmAllday" type="checkbox" ${t.allDay ? 'checked' : ''} style="width:auto;min-height:auto;margin-right:8px;vertical-align:middle">Ganztägig</label></div>
+    <div class="row2" id="tmTimes" ${t.allDay ? 'style="display:none"' : ''}>
+      <div class="field"><label>Beginn</label><input id="tmStart" type="time" value="${t.start || ''}"></div>
+      <div class="field"><label>Ende</label><input id="tmEnd" type="time" value="${t.end || ''}"></div>
+    </div>
+    <div class="field"><label>Kurs (optional)</label><select id="tmCourse">${courseOpt}</select></div>
+    <div class="field"><label>Notiz (optional)</label><textarea id="tmNote" placeholder="Details …">${esc(t.note || '')}</textarea></div>
+  `, [
+    ...(editing ? [{ label: 'Löschen', cls: 'danger', onClick: () => {
+      data.termine = data.termine.filter(x => x.id !== id); save(); closeModal(); renderTermine();
+    }}] : []),
+    { label: 'Abbrechen', onClick: closeModal },
+    { label: 'Speichern', cls: 'primary', onClick: () => {
+      const title = val('tmTitle').trim();
+      if (!title) return toast('Bitte einen Titel eingeben.');
+      const allDay = document.getElementById('tmAllday').checked;
+      const rec = {
+        title, date: val('tmDate'), allDay,
+        start: allDay ? '' : val('tmStart'), end: allDay ? '' : val('tmEnd'),
+        location: val('tmLoc').trim(), note: val('tmNote').trim(), courseId: val('tmCourse') || null,
+      };
+      if (editing) Object.assign(t, rec);
+      else data.termine.push(Object.assign({ id: uid(), uid: uid() + '@pult' }, rec));
+      save(); closeModal(); renderTermine();
+    }},
+  ]);
+  document.getElementById('tmAllday').onchange = e => {
+    document.getElementById('tmTimes').style.display = e.target.checked ? 'none' : '';
+  };
+}
+
 /* ---------- Kurs-Detail ---------- */
 function renderCourse() {
   const c = getCourse(route.courseId);
@@ -579,7 +1120,7 @@ function renderCourse() {
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn small" id="btnZwischen">+ Zwischenstand</button>
         <button class="btn small" id="btnStudents">Schüler:innen</button>
-        <button class="btn small" id="btnCourseEdit">Kurs bearbeiten</button>
+        <button class="btn small" id="btnMore">Mehr</button>
       </div>
     </div>
 
@@ -599,6 +1140,7 @@ function renderCourse() {
       <button class="btn small" id="btnAddKA">+ KA</button>
       <button class="btn small" id="btnAddMuend">+ Mündlich</button>
       <button class="btn small" id="btnMitarbeit">+ Mitarbeit</button>
+      <button class="btn small primary" id="btnDurch">Durchtippen</button>
       <button class="btn small" id="btnSonstige">Sonstige (${hy.sonstige.length})</button>
     </div>
 
@@ -607,23 +1149,24 @@ function renderCourse() {
     <div class="legend">
       <span><i style="background:var(--g-top)"></i> 13–15 (1)</span>
       <span><i style="background:var(--g-good)"></i> 10–12 (2)</span>
-      <span><i style="background:#fff"></i> 7–9 (3)</span>
-      <span><i style="background:var(--g-low)"></i> 4–6 (4)</span>
-      <span><i style="background:var(--g-bad)"></i> 1–3 (5)</span>
-      <span><i style="background:var(--g-fail)"></i> 0 (6)</span>
+      <span><i style="background:#fff"></i> 07–09 (3)</span>
+      <span><i style="background:var(--g-low)"></i> 04–06 (4)</span>
+      <span><i style="background:var(--g-bad)"></i> 01–03 (5)</span>
+      <span><i style="background:var(--g-fail)"></i> 00 (6)</span>
       <span><i style="background:#fdf8ee;border-color:var(--amber)"></i> Sonstige (Bonus)</span>
     </div>
   `;
 
   document.querySelectorAll('.tab').forEach(t => t.onclick = () => go({ hy: t.dataset.hy }));
   document.querySelectorAll('#viewSeg button').forEach(b => b.onclick = () => go({ view: b.dataset.v }));
-  document.getElementById('btnCourseEdit').onclick = () => openCourseForm(c);
   document.getElementById('btnStudents').onclick = () => openStudents(c);
   document.getElementById('btnZwischen').onclick = () => createZwischenstand(c);
+  document.getElementById('btnMore').onclick = () => openMoreMenu(c);
   document.getElementById('btnAddSchrift').onclick = () => openColumnForm(c, 'schriftlich');
   document.getElementById('btnAddKA').onclick = () => createKA(c);
   document.getElementById('btnAddMuend').onclick = () => openColumnForm(c, 'muendlich');
   document.getElementById('btnMitarbeit').onclick = () => quickMitarbeit(c);
+  document.getElementById('btnDurch').onclick = () => startDurchtippen(c);
   document.getElementById('btnSonstige').onclick = () => openSonstige(c);
 
   renderTable(c);
@@ -754,6 +1297,7 @@ function renderStudent() {
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn small" id="sdSim">Was brauche ich noch?</button>
+        <button class="btn small" id="sdNotes">Notizen</button>
         <button class="btn small" id="sdEdit">Stammdaten</button>
       </div>
     </div>
@@ -777,11 +1321,12 @@ function renderStudent() {
       <button class="btn small" id="sdEndCalc" style="margin-top:8px">Rechenweg & Note setzen</button>
     </div>
 
-    <div class="notice" style="margin-top:16px">Notenverlauf-Grafik und Beobachtungsnotizen folgen in den nächsten Phasen.</div>
+    <div class="notice" style="margin-top:16px">Hausaufgaben: <b>${haCounts(c, s.id).gemacht}×</b> gemacht, <b>${haCounts(c, s.id).nicht}×</b> nicht gemacht.</div>
   `;
 
   document.getElementById('sdEdit').onclick = () => openStudentForm(c, s.id);
   document.getElementById('sdSim').onclick = () => openSimulator(c, s.id);
+  document.getElementById('sdNotes').onclick = () => openNotes(c, s.id);
   app().querySelectorAll('.sd-grade').forEach(row => row.onclick = () => {
     const col = c.halfYears[row.dataset.hy].columns.find(x => x.id === row.dataset.col);
     if (col.ka) return go({ name: 'ka', courseId: c.id, columnId: col.id, kaTab: 'eingabe' });
@@ -933,7 +1478,7 @@ function renderKaBewertung(c, col) {
 
   const schemeRows = col.ka.scheme.map((r, i) => `
     <div class="scheme-row" data-i="${i}">
-      <span class="sr-note">${r.points}<small>${NOTE_MAP[r.points]}</small></span>
+      <span class="sr-note">${pad2(r.points)}<small>${NOTE_MAP[r.points]}</small></span>
       <input type="range" min="0" max="100" value="${r.minPercent}" class="sr-range">
       <input type="number" min="0" max="100" value="${r.minPercent}" class="sr-pct">
     </div>`).join('');
@@ -1107,6 +1652,7 @@ function renderTable(c) {
   const sonstM = hy.sonstige.filter(s => s.scope === 'muendlich');
   const sonstA = hy.sonstige.filter(s => s.scope === 'allgemein');
   const zwCols = hy.columns.filter(x => x.type === 'zwischenstand');
+  const showHA = (c.haLog || []).length > 0;
 
   const headCols = (cols, grpClass) => cols.map(col => `
     <th class="colhead ${grpClass}" data-col="${col.id}">
@@ -1124,6 +1670,7 @@ function renderTable(c) {
   const zwHead = zwCols.map(col => `<th class="grp-prev zw-head" data-zw="${col.id}">${esc(col.label||'Zwischenstand')}<span class="ch-date">${fmtDate(col.date)}</span></th>`).join('');
   if (isGesamt) {
     thead += headSonst(sonstA);
+    if (showHA) thead += `<th class="grp-ha ha-head">Hausaufgaben<span class="ch-date">gemacht / fehlt</span></th>`;
     thead += zwHead;
     thead += `<th class="grp-final ${stickyGesamt?'col-sticky-r':''}">Gesamt</th>`;
     if (route.hy === '2') thead += `<th class="grp-final col-sticky-r">Endjahr</th>`;
@@ -1154,7 +1701,8 @@ function renderTable(c) {
     const comp = computeHalf(c, route.hy, s.id);
     const sparkVals = gradeSeries(c, s.id, [route.hy]).map(p => p.value);
     const spark = sparkVals.length >= 2 ? `<div class="spark">${sparkSvg(sparkVals)}</div>` : '';
-    let tr = `<tr class="${studentActive(s)?'':'inactive'}"><td class="col-name"><span class="sname sname-link" data-student="${s.id}">${esc(s.firstName)} ${esc(s.lastName||'')}${s.exit?' <small>(aus)</small>':''}</span>${spark}</td>`;
+    const blind = blindSpot(c, route.hy, s.id) ? '<span class="blind-dot" title="keine aktuelle mündliche Note"></span>' : '';
+    let tr = `<tr class="${studentActive(s)?'':'inactive'}"><td class="col-name"><span class="sname sname-link" data-student="${s.id}">${esc(s.firstName)} ${esc(s.lastName||'')}${blind}${s.exit?' <small>(aus)</small>':''}</span>${spark}</td>`;
     if (route.hy === '2') {
       const g1 = effGesamt(c, '1', s.id).value;
       tr += `<td class="prev-cell"><div class="cell">${fmtGrade(g1, scale, true)}</div></td>`;
@@ -1171,6 +1719,7 @@ function renderTable(c) {
     }
     if (isGesamt) {
       sonstA.forEach(so => tr += sonstCell(s.id, so.id));
+      if (showHA) { const hc = haCounts(c, s.id); tr += `<td class="ha-cell"><div class="cell">${hc.gemacht} <span style="color:${hc.nicht?'var(--g-fail)':'var(--ink-faint)'}">/ ${hc.nicht}</span></div></td>`; }
       zwCols.forEach(col => tr += `<td class="prev-cell"><div class="cell">${fmtGrade((col.values||{})[s.id], scale, true)}</div></td>`);
       tr += `<td class="final ${stickyGesamt?'col-sticky-r':''}" data-final="gesamt" data-s="${s.id}">${finalCell(effGesamt(c, route.hy, s.id), trendArrowSvg(trendDir(c, route.hy, s.id)))}</td>`;
       if (route.hy === '2') tr += `<td class="final col-sticky-r" data-final="endjahr" data-s="${s.id}">${finalCell(effEndjahr(c, s.id))}</td>`;
@@ -1179,10 +1728,14 @@ function renderTable(c) {
     return tr;
   }).join('');
 
-  host.innerHTML = `<div class="table-wrap"><table class="grades"><thead>${thead}</thead><tbody>${rows}</tbody></table></div>`;
+  const blindCount = c.students.filter(s => studentActive(s) && blindSpot(c, route.hy, s.id)).length;
+  const blindNote = blindCount ? `<div class="notice" style="border-color:var(--amber);display:flex;align-items:center;gap:8px"><span class="blind-dot"></span> ${blindCount} ohne aktuelle mündliche Note (über ${BLIND_DAYS} Tage bzw. keine).</div>` : '';
+  host.innerHTML = `${blindNote}<div class="table-wrap"><table class="grades"><thead>${thead}</thead><tbody>${rows}</tbody></table></div>`;
 
   host.querySelectorAll('td.grade-cell').forEach(td =>
     td.onclick = () => openGradeCell(c, td.dataset.s, td.dataset.col));
+  host.querySelectorAll('th.ha-head').forEach(th =>
+    th.onclick = () => go({ name: 'ha', courseId: c.id }));
   host.querySelectorAll('td.sonst-cell').forEach(td =>
     td.onclick = () => openSonstCell(c, td.dataset.s, td.dataset.so));
   host.querySelectorAll('th.colhead').forEach(th =>
@@ -1216,8 +1769,8 @@ function openPad(title, current, onPick, scale) {
     const gc = gradeColor(p);
     const bg = gc.bg === 'transparent' ? '#fff' : gc.bg;
     const fg = gc.fg === 'var(--line)' ? 'var(--ink)' : gc.fg;
-    const big = scale === 'noten' ? NOTE_MAP[p] : p;
-    const sub = scale === 'noten' ? `${p} P.` : NOTE_MAP[p];
+    const big = scale === 'noten' ? NOTE_MAP[p] : pad2(p);
+    const sub = scale === 'noten' ? `${pad2(p)} P.` : NOTE_MAP[p];
     pad += `<button data-p="${p}" class="${current===p?'sel':''}" style="background:${bg};color:${fg}">${big}<span class="nt" style="color:${fg}">${sub}</span></button>`;
   }
   modal(title, `<div class="gradepad">${pad}<button class="gradepad-clear btn" data-p="clear">Note entfernen</button></div>`,
@@ -1412,7 +1965,7 @@ function openSimulator(c, sId) {
     const cur = simulateGesamt(c, hyKey, sId, null);
     document.getElementById('simCur').textContent = `Aktuelle Gesamtnote: ${fmtGrade(cur, scale, true)}. Variabel: die nächste schriftliche Note.`;
     document.getElementById('simScenarios').innerHTML = [13, 10, 7, 4].map(t => {
-      const extra = scale === 'noten' ? '' : `  <span class="cs-sub">(ab ${t} P.)</span>`;
+      const extra = scale === 'noten' ? '' : `  <span class="cs-sub">(ab ${pad2(t)} P.)</span>`;
       return `<div class="cs-line"><span>Gesamtnote ${noteFromPoints(t)}${extra}</span><span class="cs-vals">${statusHtml(t)}</span></div>`;
     }).join('');
 
@@ -1427,6 +1980,237 @@ function openSimulator(c, sId) {
   };
   ['simHy', 'simTarget'].forEach(id => document.getElementById(id).onchange = run);
   run();
+}
+
+/* ============================================================
+   Phase 3 — Alltag: HA, Durchtippen, Notizen, Listen
+   ============================================================ */
+/* Hausaufgaben-Protokoll — eigene Seite */
+function renderHaPage() {
+  const c = getCourse(route.courseId);
+  if (!c) return go({ name: 'home' });
+  const active = c.students.filter(studentActive);
+  const log = (c.haLog || []).slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+
+  const totalRows = active.map(s => {
+    const h = haCounts(c, s.id);
+    return `<tr><td class="col-name"><span class="sname">${esc(s.firstName)} ${esc(s.lastName||'')}</span></td>
+      <td class="avg"><div class="cell">${h.gemacht}</div></td>
+      <td class="avg"><div class="cell" style="color:${h.nicht?'var(--g-fail)':'var(--ink-soft)'}">${h.nicht}</div></td></tr>`;
+  }).join('');
+
+  const sessRows = log.map(sess => {
+    const cnt = Object.keys(sess.marks || {}).filter(k => sess.marks[k]).length;
+    const lbl = sess.mode === 'nicht' ? `${cnt}× nicht gemacht` : `${cnt}× gemacht (Bonus)`;
+    return `<div class="chip"><div class="chip-main"><b>${fmtDateLong(sess.date)||'ohne Datum'}</b><span>${lbl}</span></div>
+      <button class="btn small danger" data-del="${sess.id}">Löschen</button></div>`;
+  }).join('') || `<div class="notice">Noch keine Erhebungen. Lege eine an — z. B. „wer hat die HA nicht gemacht?".</div>`;
+
+  app().innerHTML = `
+    <div class="page-head">
+      <div><h1>Hausaufgaben</h1><div class="sub">${esc(c.subject)} ${esc(c.className)} · Protokoll, wirkt nicht auf die Note</div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn small primary" id="haAdd">+ Erhebung</button>
+        <button class="btn small danger" id="haReset">Zählung zurücksetzen</button>
+      </div>
+    </div>
+    <div class="row2" style="align-items:start;gap:20px">
+      <div class="calc-block" style="padding:0;overflow:hidden">
+        <div class="table-wrap" style="box-shadow:none;border:none">
+          <table class="grades"><thead><tr><th class="col-name">Schüler:in</th>
+            <th class="grp-muend">gemacht</th><th class="grp-muend">fehlt</th></tr></thead>
+          <tbody>${totalRows}</tbody></table>
+        </div>
+      </div>
+      <div class="calc-block">
+        <h3>Erhebungen (${log.length})</h3>
+        <div class="chip-list">${sessRows}</div>
+      </div>
+    </div>
+  `;
+  document.getElementById('haAdd').onclick = () => openHaSession(c);
+  document.getElementById('haReset').onclick = () => {
+    modal('Zählung zurücksetzen?', `<p>Alle ${(c.haLog||[]).length} Hausaufgaben-Erhebungen dieses Kurses werden gelöscht, die Zählung beginnt von vorn.</p>`, [
+      { label: 'Abbrechen', onClick: closeModal },
+      { label: 'Zurücksetzen', cls: 'danger', onClick: () => { c.haLog = []; save(); closeModal(); renderHaPage(); } },
+    ]);
+  };
+  app().querySelectorAll('[data-del]').forEach(b => b.onclick = () => { c.haLog = c.haLog.filter(x => x.id !== b.dataset.del); save(); renderHaPage(); });
+}
+function openHaSession(c) {
+  const active = c.students.filter(studentActive);
+  const marks = {};
+  const render = () => {
+    const mode = val('haMode') || 'nicht';
+    const prompt = mode === 'nicht' ? 'Tippe an, wer die Hausaufgaben <b>nicht</b> gemacht hat (Rest zählt als gemacht):' : 'Tippe an, wer die Hausaufgaben gemacht hat (Bonus, Rest neutral):';
+    document.getElementById('haPrompt').innerHTML = prompt;
+    document.getElementById('haStudents').innerHTML = active.map(s =>
+      `<button class="btn small ha-mark ${marks[s.id]?'bad':''}" data-s="${s.id}">${esc(s.firstName)} ${esc(s.lastName||'')}</button>`).join('');
+    document.querySelectorAll('.ha-mark').forEach(b => b.onclick = () => { const id = b.dataset.s; marks[id] = !marks[id]; render(); });
+  };
+  modal('Neue HA-Erhebung', `
+    <div class="row2">
+      <div class="field"><label>Datum</label><input id="haDate" type="date" value="${todayISO()}"></div>
+      <div class="field"><label>Art</label><select id="haMode">
+        <option value="nicht">Fehlende zählen (Malus)</option>
+        <option value="gemacht">Erledigte zählen (Bonus)</option>
+      </select></div>
+    </div>
+    <div class="cs-sub" id="haPrompt" style="margin-bottom:8px"></div>
+    <div class="chip-wrap" id="haStudents"></div>
+  `, [
+    { label: 'Abbrechen', onClick: closeModal },
+    { label: 'Speichern', cls: 'primary', onClick: () => {
+      c.haLog.push({ id: uid(), date: val('haDate'), mode: val('haMode'), marks: Object.assign({}, marks) });
+      save(); closeModal(); renderHaPage();
+      toast('Erhebung gespeichert.');
+    }},
+  ]);
+  document.getElementById('haMode').onchange = render;
+  render();
+}
+
+/* Klasse durchtippen (mündliche Mitarbeit, heute) */
+function startDurchtippen(c) {
+  const hy = c.halfYears[route.hy];
+  let col = hy.columns.find(x => x.type === 'muendlich' && x.label === 'Mitarbeit' && x.date === todayISO());
+  if (!col) { col = { id: uid(), type: 'muendlich', label: 'Mitarbeit', date: todayISO() }; hy.columns.push(col); save(); }
+  openDurchtippen(c, col.id, 0);
+}
+/* bisherige mündliche Kennzahlen (ohne die aktuelle Spalte) */
+function muendlichInfo(c, hyKey, sId, excludeColId) {
+  const cols = c.halfYears[hyKey].columns.filter(x => x.type === 'muendlich' && x.id !== excludeColId);
+  const withGrade = cols.map(x => ({ date: x.date, v: (data.grades[sId] || {})[x.id] })).filter(o => o.v != null && !isNaN(o.v));
+  const vals = withGrade.map(o => o.v);
+  const avg = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+  let trend = null;
+  if (vals.length >= 3) {
+    const half = Math.floor(vals.length / 2);
+    const m = a => a.reduce((x, y) => x + y, 0) / a.length;
+    const d = m(vals.slice(vals.length - half)) - m(vals.slice(0, half));
+    trend = d >= 1 ? 'up' : d <= -1 ? 'down' : 'flat';
+  }
+  const dated = withGrade.filter(o => o.date).map(o => o.date).sort();
+  return { avg, trend, lastDate: dated.length ? dated[dated.length - 1] : null, count: vals.length };
+}
+function openDurchtippen(c, colId, idx) {
+  const hy = c.halfYears[route.hy]; const col = hy.columns.find(x => x.id === colId);
+  const students = c.students.filter(studentActive);
+  if (!col || !students.length) { closeModal(); renderCourse(); return; }
+  if (idx >= students.length) { closeModal(); renderCourse(); toast('Durchtippen fertig.'); return; }
+  const s = students[idx];
+  const scale = c.scale;
+  const cur = (data.grades[s.id] || {})[colId];
+  const info = muendlichInfo(c, route.hy, s.id, colId);
+  const trendTxt = info.trend === 'up' ? `steigend ${trendArrowSvg('up')}` : info.trend === 'down' ? `fallend ${trendArrowSvg('down')}` : info.trend === 'flat' ? 'gleichbleibend' : '—';
+  let pad = '';
+  for (let p = 15; p >= 0; p--) {
+    const gc = gradeColor(p); const bg = gc.bg === 'transparent' ? '#fff' : gc.bg; const fg = gc.fg === 'var(--line)' ? 'var(--ink)' : gc.fg;
+    const big = scale === 'noten' ? NOTE_MAP[p] : pad2(p); const sub = scale === 'noten' ? `${pad2(p)} P.` : NOTE_MAP[p];
+    pad += `<button data-p="${p}" class="${cur===p?'sel':''}" style="background:${bg};color:${fg}">${big}<span class="nt" style="color:${fg}">${sub}</span></button>`;
+  }
+  modal(`${esc(col.label)} — ${esc(s.firstName)} ${esc(s.lastName||'')}  (${idx+1}/${students.length})`,
+    `<div class="dt-info">
+       <div><span class="dt-lbl">Ø Mitarbeit</span><b>${fmtGrade(info.avg, scale, true)}</b></div>
+       <div><span class="dt-lbl">Tendenz</span><b>${trendTxt}</b></div>
+       <div><span class="dt-lbl">Letzte Note</span><b>${info.lastDate ? fmtDateLong(info.lastDate) : '—'}</b></div>
+     </div>
+     <div class="gradepad">${pad}<button class="gradepad-clear btn" data-p="skip">Überspringen (keine Note)</button></div>`, [
+    { label: 'Beenden', onClick: () => { closeModal(); renderCourse(); } },
+    { label: 'Weiter ohne Note ›', cls: 'primary', onClick: () => openDurchtippen(c, colId, idx + 1) },
+  ]);
+  document.querySelectorAll('.gradepad button').forEach(b => b.onclick = () => {
+    if (b.dataset.p !== 'skip') { if (!data.grades[s.id]) data.grades[s.id] = {}; data.grades[s.id][colId] = parseInt(b.dataset.p); save(); }
+    openDurchtippen(c, colId, idx + 1);
+  });
+}
+
+/* Mehr-Menü */
+function openMoreMenu(c) {
+  modal('Mehr', `<div class="chip-list">
+    <button class="btn" style="width:100%" id="mmHa">Hausaufgaben protokollieren</button>
+    <button class="btn" style="width:100%" id="mmNotes">Kursnotizen</button>
+    <button class="btn" style="width:100%" id="mmLists">Einsammel-Listen</button>
+    <button class="btn" style="width:100%" id="mmEdit">Kurs bearbeiten</button>
+  </div>`, [{ label: 'Schließen', onClick: closeModal }]);
+  document.getElementById('mmHa').onclick = () => { closeModal(); go({ name: 'ha', courseId: c.id }); };
+  document.getElementById('mmNotes').onclick = () => openNotes(c, null);
+  document.getElementById('mmLists').onclick = () => openLists(c);
+  document.getElementById('mmEdit').onclick = () => openCourseForm(c);
+}
+
+/* Notizen (Schüler:in oder Kurs) */
+function courseNotes(c, studentId) {
+  return data.notes.filter(n => n.courseId === c.id && (studentId ? n.studentId === studentId : !n.studentId))
+    .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+}
+function openNotes(c, studentId) {
+  const s = studentId ? c.students.find(x => x.id === studentId) : null;
+  const list = courseNotes(c, studentId).map(n => `<div class="chip">
+    <div class="chip-main"><b>${fmtDateLong(n.date)||'ohne Datum'}</b><span>${esc(n.text)}</span></div>
+    <button class="btn small danger" data-del="${n.id}">Löschen</button></div>`).join('') || `<div class="notice">Noch keine Notizen.</div>`;
+  modal(s ? `Notizen — ${esc(s.firstName)} ${esc(s.lastName||'')}` : 'Kursnotizen', `
+    <div class="field"><label>Neue Notiz</label>
+      <input id="ntDate" type="date" value="${todayISO()}" style="margin-bottom:8px">
+      <textarea id="ntText" placeholder="${s?'Beobachtung, Gespräch …':'Organisatorisches, z. B. Wandertag geplant'}"></textarea>
+    </div>
+    <button class="btn small" id="ntAdd">Notiz hinzufügen</button>
+    <hr style="border:none;border-top:1px solid var(--line-soft);margin:14px 0">
+    <div class="chip-list">${list}</div>
+  `, [{ label: 'Schließen', cls: 'primary', onClick: () => { closeModal(); render(); } }]);
+  document.getElementById('ntAdd').onclick = () => {
+    const text = val('ntText').trim(); if (!text) return toast('Bitte Text eingeben.');
+    data.notes.push({ id: uid(), courseId: c.id, studentId: studentId || null, date: val('ntDate'), text });
+    save(); openNotes(c, studentId);
+  };
+  document.querySelectorAll('[data-del]').forEach(b => b.onclick = () => { data.notes = data.notes.filter(n => n.id !== b.dataset.del); save(); openNotes(c, studentId); });
+}
+
+/* Einsammel-Listen */
+function openLists(c) {
+  const active = c.students.filter(studentActive);
+  const lists = data.lists.filter(l => l.courseId === c.id);
+  const rows = lists.map(l => {
+    const done = active.filter(s => ['abgegeben', 'befreit'].includes(l.status[s.id])).length;
+    const over = l.dueDate && daysSince(l.dueDate) > 0 && done < active.length;
+    return `<div class="chip">
+      <div class="chip-main"><b>${esc(l.title)}</b><span>${l.dueDate?(over?'überfällig seit ':'fällig ')+fmtDateLong(l.dueDate)+' · ':''}${done}/${active.length} erledigt</span></div>
+      <div style="display:flex;gap:6px"><button class="btn small" data-open="${l.id}">Öffnen</button><button class="btn small danger" data-del="${l.id}">Löschen</button></div></div>`;
+  }).join('') || `<div class="notice">Noch keine Listen. Für Zettel, Ordner, Geld … — unabhängig von Noten.</div>`;
+  modal('Einsammel-Listen', `
+    <div class="row2">
+      <div class="field"><label>Neue Liste</label><input id="liTitle" type="text" placeholder="z. B. Einverständnis Klassenfahrt"></div>
+      <div class="field"><label>Fällig (optional)</label><input id="liDue" type="date"></div>
+    </div>
+    <button class="btn small" id="liAdd">Liste anlegen</button>
+    <hr style="border:none;border-top:1px solid var(--line-soft);margin:14px 0">
+    <div class="chip-list">${rows}</div>
+  `, [{ label: 'Schließen', cls: 'primary', onClick: closeModal }]);
+  document.getElementById('liAdd').onclick = () => {
+    const title = val('liTitle').trim(); if (!title) return toast('Bitte Titel eingeben.');
+    data.lists.push({ id: uid(), courseId: c.id, title, dueDate: val('liDue'), status: {} });
+    save(); openLists(c);
+  };
+  document.querySelectorAll('[data-open]').forEach(b => b.onclick = () => openList(c, b.dataset.open));
+  document.querySelectorAll('[data-del]').forEach(b => b.onclick = () => { data.lists = data.lists.filter(l => l.id !== b.dataset.del); save(); openLists(c); });
+}
+function openList(c, listId) {
+  const l = data.lists.find(x => x.id === listId); if (!l) return openLists(c);
+  const active = c.students.filter(studentActive);
+  const cycle = { offen: 'abgegeben', abgegeben: 'befreit', befreit: 'offen' };
+  const rows = active.map(s => {
+    const st = l.status[s.id] || 'offen';
+    const cls = st === 'abgegeben' ? 'good' : st === 'befreit' ? '' : 'bad';
+    return `<div class="chip"><div class="chip-main"><b>${esc(s.firstName)} ${esc(s.lastName||'')}</b></div>
+      <button class="btn small li-toggle ${cls}" data-s="${s.id}">${st}</button></div>`;
+  }).join('');
+  const done = active.filter(s => ['abgegeben', 'befreit'].includes(l.status[s.id])).length;
+  modal(`${esc(l.title)} — ${done}/${active.length}`, `
+    ${l.dueDate?`<div class="cs-sub" style="margin-bottom:8px">Fällig ${fmtDateLong(l.dueDate)}</div>`:''}
+    <div class="cs-sub" style="margin-bottom:8px">Antippen wechselt: offen → abgegeben → befreit.</div>
+    <div class="chip-list">${rows}</div>
+  `, [{ label: 'Zurück', onClick: () => openLists(c) }, { label: 'Fertig', cls: 'primary', onClick: closeModal }]);
+  document.querySelectorAll('.li-toggle').forEach(b => b.onclick = () => { const sId = b.dataset.s; l.status[sId] = cycle[l.status[sId] || 'offen']; save(); openList(c, listId); });
 }
 
 /* ============================================================
@@ -1508,6 +2292,8 @@ function confirmDeleteCourse(c) {
     { label: 'Abbrechen', onClick: () => openCourseForm(c) },
     { label: 'Endgültig löschen', cls: 'danger', onClick: () => {
       c.students.forEach(s => { delete data.grades[s.id]; delete data.sonstigeValues[s.id]; delete data.manual[s.id]; delete data.weightOverride[s.id]; delete data.kaPoints[s.id]; });
+      data.notes = data.notes.filter(n => n.courseId !== c.id);
+      data.lists = data.lists.filter(l => l.courseId !== c.id);
       data.courses = data.courses.filter(x => x.id !== c.id);
       save(); closeModal(); go({ name: 'home' });
     }},
@@ -1661,6 +2447,7 @@ function openStudents(c) {
     delete data.grades[b.dataset.del]; delete data.sonstigeValues[b.dataset.del];
     delete data.manual[b.dataset.del]; delete data.weightOverride[b.dataset.del];
     delete data.kaPoints[b.dataset.del];
+    data.notes = data.notes.filter(n => n.studentId !== b.dataset.del);
     save(); openStudents(c);
   });
 }
@@ -1769,7 +2556,7 @@ function openImport(c) {
 /* ---------- Termine / Meta ---------- */
 function openMetaSettings() {
   const m = data.meta;
-  modal('Termine & Einstellungen', `
+  modal('Einstellungen', `
     <div class="field"><label>Nächster Ferienbeginn</label>
       <div class="row2">
         <input id="mFerienDate" type="date" value="${m.ferienDatum||''}">
@@ -1824,4 +2611,5 @@ function toast(msg) {
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
 
 /* ---------- Start ---------- */
+data = load();
 render();
