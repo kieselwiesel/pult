@@ -3,8 +3,21 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="description" content="Pult. — Lehrerhelfer: Notenverwaltung, Stundenplan, Todos und Termine. Läuft komplett lokal im Browser.">
+  <meta name="theme-color" content="#16514b">
+
+  <!-- Installierbare Web-App (PWA) -->
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="icon" href="icons/icon-192.png" sizes="192x192" type="image/png">
+
+  <!-- iOS „Zum Home-Bildschirm" -->
   <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Pult.">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+
   <title>Pult.</title>
   <link rel="stylesheet" href="css/pult.css">
 </head>
@@ -33,5 +46,11 @@
   </div>
 
   <script src="js/pult.js"></script>
+  <script>
+    /* Service Worker registrieren (nur über http/https, nicht bei file://) */
+    if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+      window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+    }
+  </script>
 </body>
 </html>

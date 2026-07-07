@@ -1,0 +1,46 @@
+/* Pult. — Service Worker
+   Netzwerk-zuerst mit Cache-Fallback: online immer aktuell, offline lauffähig.
+   Bei Änderungen am App-Shell die CACHE-Version erhöhen. */
+'use strict';
+
+const CACHE = 'pult-v1';
+const ASSETS = [
+  './',
+  './index.html',
+  './css/pult.css',
+  './js/pult.js',
+  './manifest.webmanifest',
+  './icons/icon.svg',
+  './icons/icon-192.png',
+  './icons/icon-512.png',
+  './icons/apple-touch-icon.png',
+];
+
+self.addEventListener('install', event => {
+  event.waitUntil(
+    caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting())
+  );
+});
+
+self.addEventListener('activate', event => {
+  event.waitUntil(
+    caches.keys()
+      .then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
+      .then(() => self.clients.claim())
+  );
+});
+
+self.addEventListener('fetch', event => {
+  const req = event.request;
+  if (req.method !== 'GET') return;
+  if (new URL(req.url).origin !== self.location.origin) return;
+  event.respondWith(
+    fetch(req)
+      .then(res => {
+        const copy = res.clone();
+        caches.open(CACHE).then(c => c.put(req, copy)).catch(() => {});
+        return res;
+      })
+      .catch(() => caches.match(req).then(m => m || caches.match('./index.html')))
+  );
+});
