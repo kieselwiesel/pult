@@ -198,6 +198,8 @@ td.ha-cell .cell { min-width: 56px; height: 46px; display:flex; align-items:cent
 .li-toggle.good, .ha-mark.good { background: var(--g-good); border-color: var(--g-top); color: var(--g-good-fg); }
 .li-toggle.bad, .ha-mark.bad { background: var(--g-low); border-color: var(--g-bad); color: var(--g-low-fg); }
 .chip-wrap { display: flex; flex-wrap: wrap; gap: 8px; }
+.ha-sess .chip-main { cursor: pointer; }
+.ha-sess:hover { border-color: var(--ink-faint); }
 
 /* Durchtippen-Infozeile */
 .dt-info { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }

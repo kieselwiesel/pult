@@ -175,7 +175,7 @@ function newCourse(subject, className) {
     scale: 'punkte',                  // 'punkte' (0–15) | 'noten' (1–6 mit Tendenz)
     weightWritten: 40, weightOral: 60,
     weightHY1: 30, weightHY2: 70,     // Endjahresnote
-    haLog: [],                        // Hausaufgaben-Protokoll: [{id,date,mode:'nicht'|'gemacht',marks:{sId:true}}]
+    haLog: [],                        // Hausaufgaben-Protokoll: [{id,date,marks:{sId:'malus'|'bonus'}}]
     students: [],
     halfYears: {
       '1': { columns: [], sonstige: [] },
@@ -410,16 +410,29 @@ function blindSpot(course, hyKey, sId) {
   return daysSince(dated[dated.length - 1]) > BLIND_DAYS;
 }
 /* Hausaufgaben: Zählung aus dem Protokoll (course.haLog).
-   mode 'nicht' (Malus-Erhebung): markiert = nicht gemacht, Rest = gemacht.
-   mode 'gemacht' (Bonus-Erhebung): markiert = gemacht, Rest = neutral. */
+   Pro Erhebung hat jede:r einen von drei Zuständen: marks[sId] = 'malus'
+   (nicht gemacht), 'bonus' (gemacht) oder nicht gesetzt (neutral). */
 function haCounts(course, sId) {
   let gemacht = 0, nicht = 0;
   (course.haLog || []).forEach(sess => {
-    const marked = !!(sess.marks && sess.marks[sId]);
-    if (sess.mode === 'nicht') { if (marked) nicht++; else gemacht++; }
-    else if (marked) gemacht++;
+    const st = (sess.marks || {})[sId];
+    if (st === 'bonus') gemacht++;
+    else if (st === 'malus') nicht++;
   });
   return { gemacht, nicht };
+}
+/* Migration alter Erhebungen (mode + marks:{sId:true}) auf das 3-Zustands-Modell */
+function migrateHaLog() {
+  let changed = false;
+  (data.courses || []).forEach(c => (c.haLog || []).forEach(sess => {
+    if (sess.mode) {
+      const state = sess.mode === 'gemacht' ? 'bonus' : 'malus';
+      const nm = {};
+      Object.keys(sess.marks || {}).forEach(k => { if (sess.marks[k]) nm[k] = state; });
+      sess.marks = nm; delete sess.mode; changed = true;
+    }
+  }));
+  if (changed) save();
 }
 
 /* ---------- Klassenarbeit ---------- */
@@ -2039,9 +2052,14 @@ function renderHaPage() {
   }).join('');
 
   const sessRows = log.map(sess => {
-    const cnt = Object.keys(sess.marks || {}).filter(k => sess.marks[k]).length;
-    const lbl = sess.mode === 'nicht' ? `${cnt}× nicht gemacht` : `${cnt}× gemacht (Bonus)`;
-    return `<div class="chip"><div class="chip-main"><b>${fmtDateLong(sess.date)||'ohne Datum'}</b><span>${lbl}</span></div>
+    const vals = Object.values(sess.marks || {});
+    const nicht = vals.filter(x => x === 'malus').length;
+    const gemacht = vals.filter(x => x === 'bonus').length;
+    const parts = [];
+    if (nicht) parts.push(`${nicht}× nicht gemacht`);
+    if (gemacht) parts.push(`${gemacht}× gemacht`);
+    const lbl = parts.join(' · ') || 'keine Markierung';
+    return `<div class="chip ha-sess" data-edit="${sess.id}"><div class="chip-main"><b>${fmtDateLong(sess.date)||'ohne Datum'}</b><span>${lbl}</span></div>
       <button class="btn small danger" data-del="${sess.id}">Löschen</button></div>`;
   }).join('') || `<div class="notice">Noch keine Erhebungen. Lege eine an — z. B. „wer hat die HA nicht gemacht?".</div>`;
 
@@ -2075,38 +2093,53 @@ function renderHaPage() {
     ]);
   };
   app().querySelectorAll('[data-del]').forEach(b => b.onclick = () => { c.haLog = c.haLog.filter(x => x.id !== b.dataset.del); save(); renderHaPage(); });
+  app().querySelectorAll('.ha-sess .chip-main').forEach(el => el.onclick = () => openHaSession(c, el.closest('.ha-sess').dataset.edit));
 }
-function openHaSession(c) {
+/* Erhebung anlegen/bearbeiten — pro Schüler:in drei Zustände per Tippen:
+   1× rot = nicht gemacht (Malus), 2× grün = gemacht (Bonus), 3× wieder normal. */
+function openHaSession(c, sessId) {
   const active = c.students.filter(studentActive);
-  const marks = {};
-  const render = () => {
-    const mode = val('haMode') || 'nicht';
-    const prompt = mode === 'nicht' ? 'Tippe an, wer die Hausaufgaben <b>nicht</b> gemacht hat (Rest zählt als gemacht):' : 'Tippe an, wer die Hausaufgaben gemacht hat (Bonus, Rest neutral):';
-    document.getElementById('haPrompt').innerHTML = prompt;
-    document.getElementById('haStudents').innerHTML = active.map(s =>
-      `<button class="btn small ha-mark ${marks[s.id]?'bad':''}" data-s="${s.id}">${esc(s.firstName)} ${esc(s.lastName||'')}</button>`).join('');
-    document.querySelectorAll('.ha-mark').forEach(b => b.onclick = () => { const id = b.dataset.s; marks[id] = !marks[id]; render(); });
+  const existing = sessId ? (c.haLog || []).find(x => x.id === sessId) : null;
+  const marks = Object.assign({}, existing ? existing.marks : {});
+  const draw = () => {
+    document.getElementById('haStudents').innerHTML = active.map(s => {
+      const st = marks[s.id];
+      const cls = st === 'malus' ? 'bad' : st === 'bonus' ? 'good' : '';
+      return `<button class="btn small ha-mark ${cls}" data-s="${s.id}">${esc(s.firstName)} ${esc(s.lastName||'')}</button>`;
+    }).join('');
+    document.querySelectorAll('#haStudents .ha-mark').forEach(b => b.onclick = () => {
+      const id = b.dataset.s, st = marks[id];
+      if (!st) marks[id] = 'malus';
+      else if (st === 'malus') marks[id] = 'bonus';
+      else delete marks[id];
+      draw();
+    });
+    const vals = Object.values(marks);
+    document.getElementById('haSummary').textContent =
+      `${vals.filter(x => x === 'malus').length}× nicht gemacht · ${vals.filter(x => x === 'bonus').length}× gemacht`;
   };
-  modal('Neue HA-Erhebung', `
-    <div class="row2">
-      <div class="field"><label>Datum</label><input id="haDate" type="date" value="${todayISO()}"></div>
-      <div class="field"><label>Art</label><select id="haMode">
-        <option value="nicht">Fehlende zählen (Malus)</option>
-        <option value="gemacht">Erledigte zählen (Bonus)</option>
-      </select></div>
-    </div>
-    <div class="cs-sub" id="haPrompt" style="margin-bottom:8px"></div>
+  modal(existing ? 'HA-Erhebung bearbeiten' : 'Neue HA-Erhebung', `
+    <div class="field"><label>Datum</label><input id="haDate" type="date" value="${existing ? (existing.date || '') : todayISO()}"></div>
+    <div class="cs-sub" style="margin-bottom:8px">Tippen wechselt:
+      <b style="color:var(--g-fail)">1× nicht gemacht</b> →
+      <b style="color:var(--g-top)">2× gemacht (Bonus)</b> → 3× normal.</div>
     <div class="chip-wrap" id="haStudents"></div>
+    <div class="cs-sub" id="haSummary" style="margin-top:10px"></div>
   `, [
+    ...(existing ? [{ label: 'Löschen', cls: 'danger', onClick: () => {
+      c.haLog = c.haLog.filter(x => x.id !== sessId); save(); closeModal(); renderHaPage();
+    }}] : []),
     { label: 'Abbrechen', onClick: closeModal },
     { label: 'Speichern', cls: 'primary', onClick: () => {
-      c.haLog.push({ id: uid(), date: val('haDate'), mode: val('haMode'), marks: Object.assign({}, marks) });
+      const clean = {};
+      Object.keys(marks).forEach(k => { if (marks[k]) clean[k] = marks[k]; });
+      if (existing) { existing.date = val('haDate'); existing.marks = clean; }
+      else c.haLog.push({ id: uid(), date: val('haDate'), marks: clean });
       save(); closeModal(); renderHaPage();
       toast('Erhebung gespeichert.');
     }},
   ]);
-  document.getElementById('haMode').onchange = render;
-  render();
+  draw();
 }
 
 /* Klasse durchtippen (mündliche Mitarbeit, heute) */
@@ -2654,4 +2687,5 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal()
 
 /* ---------- Start ---------- */
 data = load();
+migrateHaLog();
 render();
