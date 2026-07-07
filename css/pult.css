@@ -245,6 +245,8 @@ td.final .cell .pt { font-size: 17px; }
 td.final .cell .nt { font-size: 11px; color: var(--accent-ink); font-weight: 600; }
 td.final .cell .calc { font-size: 10px; font-weight: 600; opacity: .8; }
 td.final .cell.manual .pt::after { content: "*"; font-size: 12px; vertical-align: super; }
+/* Gesamt/Endjahr optisch abgesetzt (dicke Trennlinie zu den übrigen Spalten) */
+table.grades th.sep-final, table.grades td.sep-final { border-left: 3px solid var(--accent); border-right: 3px solid var(--accent); }
 
 /* Berechnungs-Detail */
 .calc-sheet { font-size: 14px; }

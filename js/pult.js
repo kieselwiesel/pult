@@ -235,6 +235,17 @@ function gradeColor(pts) {
   if (p >= 1)  return { bg: 'var(--g-bad)',  fg: 'var(--g-bad-fg)' };
   return { bg: 'var(--g-fail)', fg: 'var(--g-fail-fg)' };
 }
+/* Notenfarbe als reine Schriftfarbe (auf hellem Grund lesbar) — für Einzelnoten */
+function gradeInk(pts) {
+  if (pts == null || isNaN(pts)) return 'var(--line)';
+  const p = Math.round(pts);
+  if (p >= 13) return 'var(--g-top)';
+  if (p >= 10) return 'var(--g-good-fg)';
+  if (p >= 7)  return 'var(--g-mid-fg)';
+  if (p >= 4)  return 'var(--g-low-fg)';
+  if (p >= 1)  return 'var(--g-bad-fg)';
+  return 'var(--g-fail)';
+}
 
 /* ---------- Notenberechnung ---------- */
 function studentActive(s) { return !s.exit; }
@@ -1719,14 +1730,14 @@ function renderTable(c) {
 
   let thead = `<tr><th class="col-name">Schüler:in</th>`;
   if (isSimpel) {
-    thead += `<th class="grp-final">Gesamt</th>`;
-    thead += headCols(muendInv.slice(0, 2), 'grp-muend');
+    thead += `<th class="grp-final sep-final">Gesamt</th>`;
     thead += `<th class="grp-muend">Ø mündl.</th>`;
+    thead += headCols(muendInv.slice(0, 2), 'grp-muend');
     thead += `<th class="grp-schrift">Ø schr.</th>`;
     thead += headCols(schriftInv.slice(0, 1), 'grp-schrift');
   } else if (inverted && isGesamt) {
-    if (route.hy === '2') thead += `<th class="grp-final">Endjahr</th>`;
-    thead += `<th class="grp-final">Gesamt</th>`;
+    if (route.hy === '2') thead += `<th class="grp-final sep-final">Endjahr</th>`;
+    thead += `<th class="grp-final sep-final">Gesamt</th>`;
     if (showHA) thead += haHead;
     thead += headSonst(allSonst);
     thead += `<th class="grp-schrift">Ø schr.</th>`;
@@ -1750,21 +1761,21 @@ function renderTable(c) {
       thead += headSonst(sonstA);
       if (showHA) thead += haHead;
       thead += zwHead;
-      thead += `<th class="grp-final ${stickyGesamt?'col-sticky-r':''}">Gesamt</th>`;
-      if (route.hy === '2') thead += `<th class="grp-final col-sticky-r">Endjahr</th>`;
+      thead += `<th class="grp-final sep-final ${stickyGesamt?'col-sticky-r':''}">Gesamt</th>`;
+      if (route.hy === '2') thead += `<th class="grp-final sep-final col-sticky-r">Endjahr</th>`;
     }
   }
   thead += `</tr>`;
 
+  // Einzelnoten: nur farbige Schrift, kein Hintergrund
   const cell = (pts) => {
-    const col = gradeColor(pts);
     const has = pts != null && !isNaN(pts);
-    return `<div class="cell ${has?'':'empty'}" style="background:${col.bg};color:${col.fg}">${has ? fmtGrade(pts, scale, false) : '·'}</div>`;
+    return `<div class="cell ${has?'':'empty'}" style="color:${gradeInk(pts)}">${has ? fmtGrade(pts, scale, false) : '·'}</div>`;
   };
+  // Durchschnitte: farbiger Hintergrund
   const avgCell = (v) => {
     const col = gradeColor(v);
-    const fg = (col.fg === 'var(--g-top-fg)' || col.fg === 'var(--g-fail-fg)') ? 'var(--ink)' : col.fg;
-    return `<div class="cell" style="color:${fg}">${fmtGrade(v, scale, true)}</div>`;
+    return `<div class="cell" style="background:${col.bg};color:${col.fg}">${fmtGrade(v, scale, true)}</div>`;
   };
   const finalCell = (eff, extra) => {
     const v = eff.value, col = gradeColor(v);
@@ -1786,14 +1797,14 @@ function renderTable(c) {
     const zwTd = col => `<td class="prev-cell"><div class="cell">${fmtGrade((col.values||{})[s.id], scale, true)}</div></td>`;
     let tr = `<tr class="${studentActive(s)?'':'inactive'}"><td class="col-name"><span class="sname sname-link" data-student="${s.id}">${esc(s.firstName)} ${esc(s.lastName||'')}${blind}${s.exit?' <small>(aus)</small>':''}</span>${spark}</td>`;
     if (isSimpel) {
-      tr += `<td class="final" data-final="gesamt" data-s="${s.id}">${finalCell(effGesamt(c, route.hy, s.id), trendArrowSvg(trendDir(c, route.hy, s.id)))}</td>`;
-      muendInv.slice(0, 2).forEach(col => tr += gradeTd(col));
+      tr += `<td class="final sep-final" data-final="gesamt" data-s="${s.id}">${finalCell(effGesamt(c, route.hy, s.id), trendArrowSvg(trendDir(c, route.hy, s.id)))}</td>`;
       tr += `<td class="avg">${avgCell(comp.mAvg)}</td>`;
+      muendInv.slice(0, 2).forEach(col => tr += gradeTd(col));
       tr += `<td class="avg">${avgCell(comp.wAvg)}</td>`;
       schriftInv.slice(0, 1).forEach(col => tr += gradeTd(col));
     } else if (inverted && isGesamt) {
-      if (route.hy === '2') tr += `<td class="final" data-final="endjahr" data-s="${s.id}">${finalCell(effEndjahr(c, s.id))}</td>`;
-      tr += `<td class="final" data-final="gesamt" data-s="${s.id}">${finalCell(effGesamt(c, route.hy, s.id), trendArrowSvg(trendDir(c, route.hy, s.id)))}</td>`;
+      if (route.hy === '2') tr += `<td class="final sep-final" data-final="endjahr" data-s="${s.id}">${finalCell(effEndjahr(c, s.id))}</td>`;
+      tr += `<td class="final sep-final" data-final="gesamt" data-s="${s.id}">${finalCell(effGesamt(c, route.hy, s.id), trendArrowSvg(trendDir(c, route.hy, s.id)))}</td>`;
       if (showHA) tr += haTd();
       allSonst.forEach(so => tr += sonstCell(s.id, so.id));
       tr += `<td class="avg">${avgCell(comp.wAvg)}</td>`;
@@ -1820,8 +1831,8 @@ function renderTable(c) {
         sonstA.forEach(so => tr += sonstCell(s.id, so.id));
         if (showHA) tr += haTd();
         zwCols.forEach(col => tr += zwTd(col));
-        tr += `<td class="final ${stickyGesamt?'col-sticky-r':''}" data-final="gesamt" data-s="${s.id}">${finalCell(effGesamt(c, route.hy, s.id), trendArrowSvg(trendDir(c, route.hy, s.id)))}</td>`;
-        if (route.hy === '2') tr += `<td class="final col-sticky-r" data-final="endjahr" data-s="${s.id}">${finalCell(effEndjahr(c, s.id))}</td>`;
+        tr += `<td class="final sep-final ${stickyGesamt?'col-sticky-r':''}" data-final="gesamt" data-s="${s.id}">${finalCell(effGesamt(c, route.hy, s.id), trendArrowSvg(trendDir(c, route.hy, s.id)))}</td>`;
+        if (route.hy === '2') tr += `<td class="final sep-final col-sticky-r" data-final="endjahr" data-s="${s.id}">${finalCell(effEndjahr(c, s.id))}</td>`;
       }
     }
     tr += `</tr>`;
@@ -1861,9 +1872,8 @@ function renderTable(c) {
 
   function sonstCell(sId, soId) {
     const v = (data.sonstigeValues[sId] || {})[soId];
-    const col = gradeColor(v);
     const has = v != null && !isNaN(v);
-    return `<td class="sonst-cell" data-s="${sId}" data-so="${soId}"><div class="cell" style="color:${has?col.fg==='var(--g-top-fg)'||col.fg==='var(--g-fail-fg)'?'var(--ink)':col.fg:'var(--line)'}">${has?fmtGrade(v, scale, false):'·'}</div></td>`;
+    return `<td class="sonst-cell" data-s="${sId}" data-so="${soId}"><div class="cell" style="color:${gradeInk(v)}">${has?fmtGrade(v, scale, false):'·'}</div></td>`;
   }
 }
 
