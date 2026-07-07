@@ -469,7 +469,7 @@ function median(arr) {
 }
 
 /* ---------- Routing ---------- */
-let route = { name: 'home', courseId: null, hy: '1', view: 'gesamt' };
+let route = { name: 'home', courseId: null, hy: '1', view: 'simpel' };
 function go(r) { route = Object.assign({}, route, r); render(); }
 
 /* ---------- Datum ---------- */
@@ -797,7 +797,7 @@ function renderCourses() {
       </div>
       <div class="cc-foot"><span>${c.students.length} Schüler:innen</span><span>Notenschnitt</span></div>
     `;
-    card.onclick = () => go({ name: 'course', courseId: c.id, hy: '1', view: 'gesamt' });
+    card.onclick = () => go({ name: 'course', courseId: c.id, hy: '1', view: 'simpel' });
     grid.appendChild(card);
   });
   const add = document.createElement('div');
@@ -927,7 +927,7 @@ function renderHome() {
     const day = +b.dataset.day, period = +b.dataset.period;
     if (planEdit) return openLessonEditor(day, period);
     const l = lessonAt(day, period);
-    if (l && getCourse(l.courseId)) go({ name: 'course', courseId: l.courseId, hy: '1', view: 'gesamt' });
+    if (l && getCourse(l.courseId)) go({ name: 'course', courseId: l.courseId, hy: '1', view: 'simpel' });
     else openLessonEditor(day, period);
   });
   app().querySelectorAll('.tt-add').forEach(b => b.onclick = () => openLessonEditor(+b.dataset.day, +b.dataset.period));
@@ -1184,6 +1184,7 @@ function renderCourse() {
 
     <div class="toolbar">
       <div class="seg" id="viewSeg">
+        <button data-v="simpel" class="${route.view==='simpel'?'active':''}">Simpel</button>
         <button data-v="gesamt" class="${route.view==='gesamt'?'active':''}">Gesamt</button>
         <button data-v="schriftlich" class="${route.view==='schriftlich'?'active':''}">Schriftlich</button>
         <button data-v="muendlich" class="${route.view==='muendlich'?'active':''}">Mündlich</button>
@@ -1192,7 +1193,6 @@ function renderCourse() {
       <button class="btn small" id="btnAddSchrift">+ Schriftlich</button>
       <button class="btn small" id="btnAddKA">+ KA</button>
       <button class="btn small" id="btnAddMuend">+ Mündlich</button>
-      <button class="btn small" id="btnMitarbeit">+ Mitarbeit</button>
       <button class="btn small primary" id="btnDurch">Durchtippen</button>
       <button class="btn small" id="btnSonstige">Sonstige (${hy.sonstige.length})</button>
     </div>
@@ -1218,19 +1218,10 @@ function renderCourse() {
   document.getElementById('btnAddSchrift').onclick = () => openColumnForm(c, 'schriftlich');
   document.getElementById('btnAddKA').onclick = () => createKA(c);
   document.getElementById('btnAddMuend').onclick = () => openColumnForm(c, 'muendlich');
-  document.getElementById('btnMitarbeit').onclick = () => quickMitarbeit(c);
   document.getElementById('btnDurch').onclick = () => startDurchtippen(c);
   document.getElementById('btnSonstige').onclick = () => openSonstige(c);
 
   renderTable(c);
-}
-
-/* Schnell: Mitarbeitsspalte (mündlich, heutiges Datum) */
-function quickMitarbeit(c) {
-  const hy = c.halfYears[route.hy];
-  hy.columns.push({ id: uid(), type: 'muendlich', label: 'Mitarbeit', date: todayISO() });
-  save(); renderCourse();
-  toast('Mitarbeit-Spalte hinzugefügt.');
 }
 
 /* ============================================================
@@ -1696,6 +1687,7 @@ function renderTable(c) {
   }
 
   const scale = c.scale || 'punkte';
+  const isSimpel = route.view === 'simpel';
   const isGesamt = route.view === 'gesamt';
   const showS = isGesamt || route.view === 'schriftlich';
   const showM = isGesamt || route.view === 'muendlich';
@@ -1726,7 +1718,13 @@ function renderTable(c) {
   const haHead = `<th class="grp-ha ha-head" title="Hausaufgaben: gemacht / fehlt">HA / Fehlt</th>`;
 
   let thead = `<tr><th class="col-name">Schüler:in</th>`;
-  if (inverted && isGesamt) {
+  if (isSimpel) {
+    thead += `<th class="grp-final">Gesamt</th>`;
+    thead += headCols(muendInv.slice(0, 2), 'grp-muend');
+    thead += `<th class="grp-muend">Ø mündl.</th>`;
+    thead += `<th class="grp-schrift">Ø schr.</th>`;
+    thead += headCols(schriftInv.slice(0, 1), 'grp-schrift');
+  } else if (inverted && isGesamt) {
     if (route.hy === '2') thead += `<th class="grp-final">Endjahr</th>`;
     thead += `<th class="grp-final">Gesamt</th>`;
     if (showHA) thead += haHead;
@@ -1736,6 +1734,14 @@ function renderTable(c) {
     thead += `<th class="grp-muend">Ø mündl.</th>`;
     thead += headCols(muendInv, 'grp-muend');
     thead += zwHead;
+  } else if (inverted && showS) {   // invertierter Schriftlich-Tab
+    thead += headSonst(sonstS);
+    thead += `<th class="grp-schrift">Ø schr.</th>`;
+    thead += headCols(schriftInv, 'grp-schrift');
+  } else if (inverted && showM) {   // invertierter Mündlich-Tab
+    thead += headSonst(sonstM);
+    thead += `<th class="grp-muend">Ø mündl.</th>`;
+    thead += headCols(muendInv, 'grp-muend');
   } else {
     if (route.hy === '2') thead += `<th class="grp-prev">Ges. HJ1</th>`;
     if (showS) { thead += headCols(schriftCols, 'grp-schrift'); thead += `<th class="grp-schrift">Ø schr.</th>`; thead += headSonst(sonstS); }
@@ -1779,7 +1785,13 @@ function renderTable(c) {
     const haTd = () => { const hc = haCounts(c, s.id); return `<td class="ha-cell"><div class="cell">${hc.gemacht} <span style="color:${hc.nicht?'var(--g-fail)':'var(--ink-faint)'}">/ ${hc.nicht}</span></div></td>`; };
     const zwTd = col => `<td class="prev-cell"><div class="cell">${fmtGrade((col.values||{})[s.id], scale, true)}</div></td>`;
     let tr = `<tr class="${studentActive(s)?'':'inactive'}"><td class="col-name"><span class="sname sname-link" data-student="${s.id}">${esc(s.firstName)} ${esc(s.lastName||'')}${blind}${s.exit?' <small>(aus)</small>':''}</span>${spark}</td>`;
-    if (inverted && isGesamt) {
+    if (isSimpel) {
+      tr += `<td class="final" data-final="gesamt" data-s="${s.id}">${finalCell(effGesamt(c, route.hy, s.id), trendArrowSvg(trendDir(c, route.hy, s.id)))}</td>`;
+      muendInv.slice(0, 2).forEach(col => tr += gradeTd(col));
+      tr += `<td class="avg">${avgCell(comp.mAvg)}</td>`;
+      tr += `<td class="avg">${avgCell(comp.wAvg)}</td>`;
+      schriftInv.slice(0, 1).forEach(col => tr += gradeTd(col));
+    } else if (inverted && isGesamt) {
       if (route.hy === '2') tr += `<td class="final" data-final="endjahr" data-s="${s.id}">${finalCell(effEndjahr(c, s.id))}</td>`;
       tr += `<td class="final" data-final="gesamt" data-s="${s.id}">${finalCell(effGesamt(c, route.hy, s.id), trendArrowSvg(trendDir(c, route.hy, s.id)))}</td>`;
       if (showHA) tr += haTd();
@@ -1789,6 +1801,14 @@ function renderTable(c) {
       tr += `<td class="avg">${avgCell(comp.mAvg)}</td>`;
       muendInv.forEach(col => tr += gradeTd(col));
       zwCols.forEach(col => tr += zwTd(col));
+    } else if (inverted && showS) {
+      sonstS.forEach(so => tr += sonstCell(s.id, so.id));
+      tr += `<td class="avg">${avgCell(comp.wAvg)}</td>`;
+      schriftInv.forEach(col => tr += gradeTd(col));
+    } else if (inverted && showM) {
+      sonstM.forEach(so => tr += sonstCell(s.id, so.id));
+      tr += `<td class="avg">${avgCell(comp.mAvg)}</td>`;
+      muendInv.forEach(col => tr += gradeTd(col));
     } else {
       if (route.hy === '2') {
         const g1 = effGesamt(c, '1', s.id).value;
