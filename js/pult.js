@@ -1722,7 +1722,7 @@ function renderTable(c) {
   const zwHead = zwCols.map(col => `<th class="grp-prev zw-head" data-zw="${col.id}">${esc(col.label||'Zwischenstand')}<span class="ch-date">${fmtDate(col.date)}</span></th>`).join('');
   if (isGesamt) {
     thead += headSonst(sonstA);
-    if (showHA) thead += `<th class="grp-ha ha-head">Hausaufgaben<span class="ch-date">gemacht / fehlt</span></th>`;
+    if (showHA) thead += `<th class="grp-ha ha-head" title="Hausaufgaben: gemacht / fehlt">HA / Fehlt</th>`;
     thead += zwHead;
     thead += `<th class="grp-final ${stickyGesamt?'col-sticky-r':''}">Gesamt</th>`;
     if (route.hy === '2') thead += `<th class="grp-final col-sticky-r">Endjahr</th>`;
@@ -2120,10 +2120,7 @@ function openHaSession(c, sessId) {
   };
   modal(existing ? 'HA-Erhebung bearbeiten' : 'Neue HA-Erhebung', `
     <div class="field"><label>Datum</label><input id="haDate" type="date" value="${existing ? (existing.date || '') : todayISO()}"></div>
-    <div class="cs-sub" style="margin-bottom:8px">Tippen wechselt:
-      <b style="color:var(--g-fail)">1× nicht gemacht</b> →
-      <b style="color:var(--g-top)">2× gemacht (Bonus)</b> → 3× normal.</div>
-    <div class="chip-wrap" id="haStudents"></div>
+   <div class="chip-wrap" id="haStudents"></div>
     <div class="cs-sub" id="haSummary" style="margin-top:10px"></div>
   `, [
     ...(existing ? [{ label: 'Löschen', cls: 'danger', onClick: () => {
