@@ -1439,6 +1439,7 @@ function renderKA() {
         <h1>${esc(col.label)}</h1>
         <div class="sub">${esc(c.subject)} ${esc(c.className)} · ${route.hy}. Halbjahr${col.date?' · '+fmtDateLong(col.date):''}</div>
       </div>
+      <button class="btn small danger" id="kaDeleteTop">Klassenarbeit löschen</button>
     </div>
     <div class="tabs">
       <button class="tab ${tab==='eingabe'?'active':''}" data-t="eingabe">Punkteeingabe</button>
@@ -1448,6 +1449,7 @@ function renderKA() {
     <div id="kaBody"></div>
   `;
   document.querySelectorAll('.tab').forEach(t => t.onclick = () => go({ kaTab: t.dataset.t }));
+  document.getElementById('kaDeleteTop').onclick = () => confirmDeleteKA(c, col);
 
   if (tab === 'eingabe') renderKaEingabe(c, col);
   else if (tab === 'bewertung') renderKaBewertung(c, col);
@@ -1603,18 +1605,19 @@ function renderKaBewertung(c, col) {
   };
 
   document.getElementById('kaToEntry').onclick = () => go({ kaTab: 'eingabe' });
-  document.getElementById('kaDelete').onclick = () => {
-    modal('Klassenarbeit löschen?', `<p>Die Klassenarbeit <b>${esc(col.label)}</b> inkl. aller eingetragenen Punkte wird gelöscht.</p>`, [
-      { label: 'Abbrechen', onClick: closeModal },
-      { label: 'Löschen', cls: 'danger', onClick: () => {
-        const hy = c.halfYears[route.hy];
-        hy.columns = hy.columns.filter(x => x.id !== col.id);
-        Object.values(data.grades).forEach(g => delete g[col.id]);
-        Object.values(data.kaPoints).forEach(k => delete k[col.id]);
-        save(); closeModal(); go({ name: 'course', courseId: c.id });
-      }},
-    ]);
-  };
+  document.getElementById('kaDelete').onclick = () => confirmDeleteKA(c, col);
+}
+function confirmDeleteKA(c, col) {
+  modal('Klassenarbeit löschen?', `<p>Die Klassenarbeit <b>${esc(col.label)}</b> inkl. aller eingetragenen Punkte wird gelöscht.</p>`, [
+    { label: 'Abbrechen', onClick: closeModal },
+    { label: 'Löschen', cls: 'danger', onClick: () => {
+      const hy = c.halfYears[route.hy];
+      hy.columns = hy.columns.filter(x => x.id !== col.id);
+      Object.values(data.grades).forEach(g => delete g[col.id]);
+      Object.values(data.kaPoints).forEach(k => delete k[col.id]);
+      save(); closeModal(); go({ name: 'course', courseId: c.id });
+    }},
+  ]);
 }
 
 /* --- Reiter: Statistik --- */
@@ -1730,11 +1733,19 @@ function renderTable(c) {
 
   let thead = `<tr><th class="col-name">Schüler:in</th>`;
   if (isSimpel) {
-    thead += `<th class="grp-final sep-final">Gesamt</th>`;
-    thead += `<th class="grp-muend">Ø mündl.</th>`;
-    thead += headCols(muendInv.slice(0, 2), 'grp-muend');
-    thead += `<th class="grp-schrift">Ø schr.</th>`;
-    thead += headCols(schriftInv.slice(0, 1), 'grp-schrift');
+    if (inverted) {
+      thead += `<th class="grp-final sep-final">Gesamt</th>`;
+      thead += `<th class="grp-muend">Ø mündl.</th>`;
+      thead += headCols(muendInv.slice(0, 2), 'grp-muend');
+      thead += `<th class="grp-schrift">Ø schr.</th>`;
+      thead += headCols(schriftInv.slice(0, 1), 'grp-schrift');
+    } else {
+      thead += headCols(schriftCols.slice(-1), 'grp-schrift');
+      thead += `<th class="grp-schrift">Ø schr.</th>`;
+      thead += headCols(muendCols.slice(-2), 'grp-muend');
+      thead += `<th class="grp-muend">Ø mündl.</th>`;
+      thead += `<th class="grp-final sep-final col-sticky-r">Gesamt</th>`;
+    }
   } else if (inverted && isGesamt) {
     if (route.hy === '2') thead += `<th class="grp-final sep-final">Endjahr</th>`;
     thead += `<th class="grp-final sep-final">Gesamt</th>`;
@@ -1797,11 +1808,19 @@ function renderTable(c) {
     const zwTd = col => `<td class="prev-cell"><div class="cell">${fmtGrade((col.values||{})[s.id], scale, true)}</div></td>`;
     let tr = `<tr class="${studentActive(s)?'':'inactive'}"><td class="col-name"><span class="sname sname-link" data-student="${s.id}">${esc(s.firstName)} ${esc(s.lastName||'')}${blind}${s.exit?' <small>(aus)</small>':''}</span>${spark}</td>`;
     if (isSimpel) {
-      tr += `<td class="final sep-final" data-final="gesamt" data-s="${s.id}">${finalCell(effGesamt(c, route.hy, s.id), trendArrowSvg(trendDir(c, route.hy, s.id)))}</td>`;
-      tr += `<td class="avg">${avgCell(comp.mAvg)}</td>`;
-      muendInv.slice(0, 2).forEach(col => tr += gradeTd(col));
-      tr += `<td class="avg">${avgCell(comp.wAvg)}</td>`;
-      schriftInv.slice(0, 1).forEach(col => tr += gradeTd(col));
+      if (inverted) {
+        tr += `<td class="final sep-final" data-final="gesamt" data-s="${s.id}">${finalCell(effGesamt(c, route.hy, s.id), trendArrowSvg(trendDir(c, route.hy, s.id)))}</td>`;
+        tr += `<td class="avg">${avgCell(comp.mAvg)}</td>`;
+        muendInv.slice(0, 2).forEach(col => tr += gradeTd(col));
+        tr += `<td class="avg">${avgCell(comp.wAvg)}</td>`;
+        schriftInv.slice(0, 1).forEach(col => tr += gradeTd(col));
+      } else {
+        schriftCols.slice(-1).forEach(col => tr += gradeTd(col));
+        tr += `<td class="avg">${avgCell(comp.wAvg)}</td>`;
+        muendCols.slice(-2).forEach(col => tr += gradeTd(col));
+        tr += `<td class="avg">${avgCell(comp.mAvg)}</td>`;
+        tr += `<td class="final sep-final col-sticky-r" data-final="gesamt" data-s="${s.id}">${finalCell(effGesamt(c, route.hy, s.id), trendArrowSvg(trendDir(c, route.hy, s.id)))}</td>`;
+      }
     } else if (inverted && isGesamt) {
       if (route.hy === '2') tr += `<td class="final sep-final" data-final="endjahr" data-s="${s.id}">${finalCell(effEndjahr(c, s.id))}</td>`;
       tr += `<td class="final sep-final" data-final="gesamt" data-s="${s.id}">${finalCell(effGesamt(c, route.hy, s.id), trendArrowSvg(trendDir(c, route.hy, s.id)))}</td>`;

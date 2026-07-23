@@ -24,7 +24,10 @@
           { "id": "e-s2", "firstName": "Tom", "lastName": "Kranz", "entry": "", "exit": "" },
           { "id": "e-s3", "firstName": "Sofia", "lastName": "Meier", "entry": "", "exit": "" },
           { "id": "e-s4", "firstName": "Emil", "lastName": "Roth", "entry": "", "exit": "" },
-          { "id": "e-s5", "firstName": "Yara", "lastName": "Schulz", "entry": "", "exit": "" }
+          { "id": "e-s5", "firstName": "Yara", "lastName": "Schulz", "entry": "", "exit": "" },
+          { "id": "e-s6", "firstName": "Lena", "lastName": "Hoffmann", "entry": "", "exit": "" },
+          { "id": "e-s7", "firstName": "Jasper", "lastName": "Nöller", "entry": "", "exit": "" },
+          { "id": "e-s8", "firstName": "Mira", "lastName": "Vogel", "entry": "", "exit": "" }
         ],
         "halfYears": {
           "1": {
@@ -55,7 +58,9 @@
           { "id": "b-s2", "firstName": "Clara", "lastName": "Behr", "entry": "", "exit": "" },
           { "id": "b-s3", "firstName": "Imke", "lastName": "Fuchs", "entry": "", "exit": "" },
           { "id": "b-s4", "firstName": "Ole", "lastName": "Graf", "entry": "", "exit": "" },
-          { "id": "b-s5", "firstName": "Pia", "lastName": "Wolf", "entry": "", "exit": "" }
+          { "id": "b-s5", "firstName": "Pia", "lastName": "Wolf", "entry": "", "exit": "" },
+          { "id": "b-s6", "firstName": "Zara", "lastName": "König", "entry": "", "exit": "" },
+          { "id": "b-s7", "firstName": "Felix", "lastName": "Sommer", "entry": "", "exit": "" }
         ],
         "halfYears": {
           "1": {
@@ -78,11 +83,16 @@
       "e-s3": { "e-ka1": 10, "e-ka2": 11, "e-mit": 12, "e-pres": 11 },
       "e-s4": { "e-ka1": 4, "e-ka2": 5, "e-mit": 6, "e-pres": 5 },
       "e-s5": { "e-ka1": 14, "e-ka2": 13, "e-mit": 13, "e-pres": 15 },
+      "e-s6": { "e-ka1": 12, "e-ka2": 6, "e-mit": 8, "e-pres": 7 },
+      "e-s7": { "e-ka1": 14, "e-ka2": 13, "e-mit": 4, "e-pres": 5 },
+      "e-s8": { "e-ka1": 2, "e-ka2": 3, "e-mit": 4, "e-pres": 3 },
       "b-s1": { "b-kl": 11, "b-mit": 12, "b-prot": 10 },
       "b-s2": { "b-kl": 8, "b-mit": 7, "b-prot": 9 },
       "b-s3": { "b-kl": 5, "b-mit": 6, "b-prot": 4 },
       "b-s4": { "b-kl": 13, "b-mit": 14, "b-prot": 12 },
-      "b-s5": { "b-kl": 9, "b-mit": 10, "b-prot": 11 }
+      "b-s5": { "b-kl": 9, "b-mit": 10, "b-prot": 11 },
+      "b-s6": { "b-kl": 1, "b-mit": 1, "b-prot": 1 },
+      "b-s7": { "b-kl": 5, "b-mit": 2, "b-prot": 1 }
     },
     "sonstigeValues": {
       "e-s1": { "e-port": 13 },
@@ -90,11 +100,16 @@
       "e-s3": { "e-port": 12 },
       "e-s4": { "e-port": 7 },
       "e-s5": { "e-port": 14 },
+      "e-s6": { "e-port": 9 },
+      "e-s7": { "e-port": 12 },
+      "e-s8": { "e-port": 4 },
       "b-s1": { "b-heft": 12 },
       "b-s2": { "b-heft": 9 },
       "b-s3": { "b-heft": 8 },
       "b-s4": { "b-heft": 13 },
-      "b-s5": { "b-heft": 10 }
+      "b-s5": { "b-heft": 10 },
+      "b-s6": { "b-heft": 1 },
+      "b-s7": { "b-heft": 4 }
     },
     "weightOverride": {},
     "manual": {},
