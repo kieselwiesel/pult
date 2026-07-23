@@ -1,0 +1,28 @@
+# Persönliche Notizen / Planungsdateien
+Plan.md
+ignore Plan.md
+Meine Vorstellung.md
+Nächste Schritte.md
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# Logs & temporäre Dateien
+*.log
+*.tmp
