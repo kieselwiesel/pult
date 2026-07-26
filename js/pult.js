@@ -18,6 +18,7 @@ const DEFAULT_DATA = () => ({
     zeugnisDatum: '',
     lastBackup: '',      // ISO-Datum des letzten JSON-Backups
     tableLayout: 'standard',  // 'standard' | 'invers' (Notentabelle)
+    halfYear: 'auto',    // 'auto' | '1' | '2' — Halbjahr beim Öffnen eines Kurses
   },
   courses: [],
   grades: {},          // grades[studentId][columnId] = punkte(0..15)
@@ -320,6 +321,27 @@ function currentGrade(course, sId) {
   if (has2) return effGesamt(course, '2', sId).value;
   return effGesamt(course, '1', sId).value;
 }
+/* Ist in diesem Halbjahr überhaupt schon etwas eingetragen? */
+function hasEntries(course, hyKey) {
+  const hy = course.halfYears[hyKey];
+  if (!hy) return false;
+  const manKey = hyKey === '1' ? 'g1' : 'g2';
+  return course.students.some(s => {
+    const gr = data.grades[s.id] || {};
+    if (hy.columns.some(col => col.type !== 'zwischenstand' && gr[col.id] != null)) return true;
+    const sv = data.sonstigeValues[s.id] || {};
+    if (hy.sonstige.some(so => sv[so.id] != null)) return true;
+    return (data.manual[s.id] || {})[manKey] != null;
+  });
+}
+/* Halbjahr, in dem ein Kurs geöffnet wird.
+   'auto': sobald im 2. Halbjahr Noten stehen, startet der Kurs dort. */
+function defaultHalfYear(course) {
+  const setting = (data.meta && data.meta.halfYear) || 'auto';
+  if (setting === '1' || setting === '2') return setting;
+  return course && hasEntries(course, '2') ? '2' : '1';
+}
+
 function courseMean(course) {
   const vals = course.students.filter(studentActive).map(s => currentGrade(course, s.id)).filter(v => v != null);
   return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
@@ -704,7 +726,7 @@ function importBackupFile(file) {
 const app = () => document.getElementById('app');
 
 function render() {
-  renderCrumbs();
+  renderTopNav();
   renderTopbarRight();
   if (route.name === 'ka') return renderKA();
   if (route.name === 'ha') return renderHaPage();
@@ -715,51 +737,37 @@ function render() {
   if (route.name === 'termine') return renderTermine();
   return renderHome();
 }
-/* gemeinsame Reiter-Navigation der Planungs-Seiten */
+/* Hauptseiten. „home" (Stundenplan) hängt an der Wortmarke „Pult." und
+   erscheint deshalb nicht als eigener Navigationspunkt. */
 const TOP_PAGES = [
-  { name: 'home', label: 'Stundenplan' },
+  { name: 'home',    label: 'Stundenplan', nav: false },
   { name: 'courses', label: 'Kurse' },
-  { name: 'todos', label: 'Todos' },
+  { name: 'todos',   label: 'Todos' },
   { name: 'termine', label: 'Termine' },
 ];
-function mainNav(active) {
+/* Unterseiten eines Kurses gehören navigatorisch zu „Kurse" */
+const COURSE_SUBPAGES = ['course', 'student', 'ka', 'ha'];
+function navActive() { return COURSE_SUBPAGES.includes(route.name) ? 'courses' : route.name; }
+
+function renderTopNav() {
+  const el = document.getElementById('topnav');
+  const active = navActive();
   const openCount = (data.todos || []).filter(t => !t.done).length;
-  return `<nav class="mainnav">${TOP_PAGES.map(p => {
+  el.innerHTML = TOP_PAGES.filter(p => p.nav !== false).map(p => {
     const badge = p.name === 'todos' && openCount ? `<span class="nav-badge">${openCount}</span>` : '';
-    return `<button class="mn ${p.name === active ? 'active' : ''}" data-nav="${p.name}">${p.label}${badge}</button>`;
-  }).join('')}</nav>`;
-}
-function bindMainNav() {
-  document.querySelectorAll('.mainnav .mn').forEach(b => b.onclick = () => go({ name: b.dataset.nav }));
-}
-function renderCrumbs() {
-  const el = document.getElementById('crumbs');
-  const top = TOP_PAGES.find(p => p.name === route.name);
-  if (top) { el.innerHTML = `<span class="here">${top.label}</span>`; return; }
-  const c = getCourse(route.courseId);
-  const base = c ? c.subject + ' · ' + c.className : '';
-  if (route.name === 'ka' || route.name === 'student' || route.name === 'ha') {
-    let leaf = 'Klassenarbeit';
-    if (route.name === 'ka') { const col = findKaColumn(c); leaf = col ? col.label : 'Klassenarbeit'; }
-    else if (route.name === 'ha') leaf = 'Hausaufgaben';
-    else { const s = c && c.students.find(x => x.id === route.studentId); leaf = s ? `${s.firstName} ${s.lastName||''}` : 'Schüler:in'; }
-    el.innerHTML = `<a class="here" id="crumbCourse" style="cursor:pointer;color:#bfdad4">${esc(base)}</a><span class="sep">›</span><span class="here">${esc(leaf)}</span>`;
-    const cc = document.getElementById('crumbCourse'); if (cc) cc.onclick = () => go({ name: 'course', courseId: c.id });
-    return;
-  }
-  el.innerHTML = `<span class="here">${esc(base)}</span>`;
+    return `<button class="tn ${p.name === active ? 'active' : ''}" data-nav="${p.name}">${p.label}${badge}</button>`;
+  }).join('');
+  el.querySelectorAll('.tn').forEach(b => b.onclick = () => go({ name: b.dataset.nav }));
 }
 function renderTopbarRight() {
   const el = document.getElementById('topbarRight');
-  if (TOP_PAGES.some(p => p.name === route.name)) {
-    el.innerHTML = `<button class="btn ghost small" id="btnSettings">Einstellungen</button>`;
-    document.getElementById('btnSettings').onclick = openMetaSettings;
-  } else if (route.name === 'ka' || route.name === 'student' || route.name === 'ha') {
+  /* Tiefe Kursseiten: zurück zum Kurs. Sonst führt die Navigation schon zurück. */
+  if (route.name === 'ka' || route.name === 'student' || route.name === 'ha') {
     el.innerHTML = `<button class="btn ghost small" id="btnBack">‹ Kurs</button>`;
     document.getElementById('btnBack').onclick = () => go({ name: 'course', courseId: route.courseId });
   } else {
-    el.innerHTML = `<button class="btn ghost small" id="btnBack">‹ Kurse</button>`;
-    document.getElementById('btnBack').onclick = () => go({ name: 'courses' });
+    el.innerHTML = `<button class="btn ghost small topbar-settings" id="btnSettings" title="Einstellungen" aria-label="Einstellungen"><span class="ts-icon" aria-hidden="true">⚙</span><span class="ts-label">Einstellungen</span></button>`;
+    document.getElementById('btnSettings').onclick = openMetaSettings;
   }
 }
 function findKaColumn(c) {
@@ -773,7 +781,6 @@ function renderCourses() {
   const backupOverdue = data.courses.length && (!data.meta.lastBackup || daysSince(data.meta.lastBackup) > 7);
 
   app().innerHTML = `
-    ${mainNav('courses')}
     ${backupOverdue ? `<div class="notice" id="backupNote" style="display:flex;justify-content:space-between;align-items:center;gap:12px;border-color:var(--amber)">
       <span>${data.meta.lastBackup ? 'Letztes Backup: '+fmtDateLong(data.meta.lastBackup)+'.' : 'Noch kein Backup erstellt.'} Sichere deine Daten regelmäßig.</span>
       <button class="btn small" id="backupNow">Backup jetzt</button></div>` : ''}
@@ -786,7 +793,6 @@ function renderCourses() {
     <div class="course-grid" id="courseGrid"></div>
   `;
 
-  bindMainNav();
   document.getElementById('btnNewCourse').onclick = () => openCourseForm();
   const bn = document.getElementById('backupNow'); if (bn) bn.onclick = exportBackup;
 
@@ -808,7 +814,7 @@ function renderCourses() {
       </div>
       <div class="cc-foot"><span>${c.students.length} Schüler:innen</span><span>Notenschnitt</span></div>
     `;
-    card.onclick = () => go({ name: 'course', courseId: c.id, hy: '1', view: 'simpel' });
+    card.onclick = () => go({ name: 'course', courseId: c.id, hy: defaultHalfYear(c), view: 'simpel' });
     grid.appendChild(card);
   });
   const add = document.createElement('div');
@@ -882,7 +888,6 @@ function renderHome() {
   const todayLabel = wdToday ? WEEKDAYS_LONG[wdToday] + ', ' + fmtDateLong(todayISO()) : 'Wochenende — ' + fmtDateLong(todayISO());
 
   app().innerHTML = `
-    ${mainNav('home')}
     <section class="dash">
       <div class="dash-card clickable" id="dashFerien">
         <div class="label">${esc(data.meta.ferienLabel || 'Nächste Ferien')}</div>${weekTile(ferien, data.meta.ferienDatum)}
@@ -925,7 +930,6 @@ function renderHome() {
     </button>
   `;
 
-  bindMainNav();
   document.getElementById('backupHint').onclick = exportBackup;
   document.getElementById('dashFerien').onclick = openMetaSettings;
   document.getElementById('dashZeugnis').onclick = openMetaSettings;
@@ -938,7 +942,7 @@ function renderHome() {
     const day = +b.dataset.day, period = +b.dataset.period;
     if (planEdit) return openLessonEditor(day, period);
     const l = lessonAt(day, period);
-    if (l && getCourse(l.courseId)) go({ name: 'course', courseId: l.courseId, hy: '1', view: 'simpel' });
+    if (l && getCourse(l.courseId)) go({ name: 'course', courseId: l.courseId, hy: defaultHalfYear(getCourse(l.courseId)), view: 'simpel' });
     else openLessonEditor(day, period);
   });
   app().querySelectorAll('.tt-add').forEach(b => b.onclick = () => openLessonEditor(+b.dataset.day, +b.dataset.period));
@@ -988,7 +992,7 @@ function openPeriodsEditor() {
     });
   };
   modal('Stundenzeiten', `
-    <div class="scheme-head" style="grid-template-columns:1fr 1fr 1fr 44px"><span>Bezeichnung</span><span>Beginn</span><span>Ende</span><span></span></div>
+    <div class="scheme-head period-head"><span class="ph-label">Bezeichnung</span><span>Beginn</span><span>Ende</span><span></span></div>
     <div id="periodList">${rows()}</div>
     <button class="btn small" id="prAdd" style="margin-top:10px">+ Stunde</button>
   `, [
@@ -1044,7 +1048,6 @@ function renderTodos() {
   const doneList = sorted.filter(t => t.done);
 
   app().innerHTML = `
-    ${mainNav('todos')}
     <div class="page-head"><div><h1>Todos</h1><div class="sub">Notizen und Aufgaben, unabhängig von Noten</div></div></div>
 
     <div class="calc-block">
@@ -1063,7 +1066,6 @@ function renderTodos() {
       <div class="todo-list">${doneList.map(item).join('')}</div>` : ''}
   `;
 
-  bindMainNav();
   const addTodo = () => {
     const text = val('tdText').trim();
     if (!text) return toast('Bitte einen Text eingeben.');
@@ -1101,7 +1103,6 @@ function renderTermine() {
   };
 
   app().innerHTML = `
-    ${mainNav('termine')}
     <div class="page-head">
       <div><h1>Termine</h1><div class="sub">${upcoming.length} anstehend</div></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -1118,7 +1119,6 @@ function renderTermine() {
       <div class="chip-list">${past.map(item).join('')}</div>` : ''}
   `;
 
-  bindMainNav();
   document.getElementById('tmAdd').onclick = () => openTerminForm();
   document.getElementById('tmExport').onclick = () => { if (!data.termine.length) return toast('Keine Termine zum Exportieren.'); exportICS(); };
   const file = document.getElementById('tmFile');
@@ -2736,6 +2736,16 @@ function openMetaSettings() {
     <div class="field"><label>Nächste Zeugniskonferenz</label><input id="mZeugnis" type="date" value="${m.zeugnisDatum||''}"></div>
     <hr style="border:none;border-top:1px solid var(--line-soft);margin:16px 0">
     <div class="field">
+      <label>Aktuelles Halbjahr</label>
+      <select id="mHalfYear">
+        <option value="auto" ${(m.halfYear||'auto')==='auto'?'selected':''}>Automatisch — 2. Halbjahr, sobald dort Noten stehen</option>
+        <option value="1" ${m.halfYear==='1'?'selected':''}>Immer 1. Halbjahr</option>
+        <option value="2" ${m.halfYear==='2'?'selected':''}>Immer 2. Halbjahr</option>
+      </select>
+      <div class="hint">Legt fest, welches Halbjahr beim Öffnen eines Kurses angezeigt wird. Umschalten geht im Kurs jederzeit.</div>
+    </div>
+    <hr style="border:none;border-top:1px solid var(--line-soft);margin:16px 0">
+    <div class="field">
       <label>Notentabelle — Darstellung</label>
       <select id="mLayout">
         <option value="standard" ${(m.tableLayout||'standard')!=='invers'?'selected':''}>Standard (Noten links, Gesamt rechts)</option>
@@ -2763,6 +2773,7 @@ function openMetaSettings() {
     { label: 'Speichern', cls: 'primary', onClick: () => {
       m.ferienDatum = val('mFerienDate'); m.ferienLabel = val('mFerienLabel').trim() || 'Ferien'; m.zeugnisDatum = val('mZeugnis');
       m.tableLayout = val('mLayout') || 'standard';
+      m.halfYear = val('mHalfYear') || 'auto';
       save(); closeModal(); render();
     }},
   ]);

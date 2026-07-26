@@ -51,7 +51,7 @@ h1, h2, h3 { font-weight: 650; letter-spacing: -0.01em; margin: 0; }
 /* ---------- Topbar ---------- */
 .topbar {
   position: sticky; top: 0; z-index: 40;
-  display: flex; align-items: center; gap: 16px;
+  display: flex; align-items: stretch; gap: 10px;
   height: 56px; padding: 0 16px;
   background: var(--accent);
   color: #eaf3f1;
@@ -59,13 +59,36 @@ h1, h2, h3 { font-weight: 650; letter-spacing: -0.01em; margin: 0; }
   padding-top: env(safe-area-inset-top);
   height: calc(56px + env(safe-area-inset-top));
 }
-.brand { cursor: pointer; user-select: none; }
+.brand { display: flex; align-items: center; flex: none; cursor: pointer; user-select: none; }
 .brand-mark { font-size: 22px; font-weight: 750; letter-spacing: -0.02em; color: #fff; }
 .brand-mark .dot { color: #7fd0c2; }
-.crumbs { display: flex; align-items: center; gap: 8px; color: #bfdad4; font-size: 14px; overflow: hidden; white-space: nowrap; flex: 1; }
-.crumbs .sep { opacity: .5; }
-.crumbs .here { color: #fff; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
-.topbar-right { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+
+/* Seiten-Navigation direkt in der Topbar; die aktive Seite ist hell unterstrichen.
+   Notfalls horizontal scrollbar (ohne sichtbare Leiste), damit nichts überlappt. */
+.topnav {
+  display: flex; align-items: stretch; gap: 2px; flex: 1; min-width: 0;
+  overflow-x: auto; overflow-y: hidden;
+  scrollbar-width: none; -ms-overflow-style: none;
+}
+.topnav::-webkit-scrollbar { display: none; }
+.topnav .tn {
+  position: relative;
+  appearance: none; background: transparent; border: none; font: inherit;
+  font-size: 15px; font-weight: 650; color: #bfdad4; cursor: pointer;
+  padding: 0 12px; display: inline-flex; align-items: center; gap: 7px;
+  white-space: nowrap; flex: none; transition: color .12s;
+}
+/* Unterstrich der aktiven Seite — sitzt direkt auf der Unterkante der Topbar */
+.topnav .tn::after {
+  content: ""; position: absolute; left: 8px; right: 8px; bottom: 0; height: 3px;
+  background: transparent; transition: background .12s;
+}
+.topnav .tn:hover { color: #fff; }
+.topnav .tn.active { color: #fff; }
+.topnav .tn.active::after { background: #7fd0c2; }
+
+.topbar-right { display: flex; align-items: center; gap: 10px; margin-left: auto; flex: none; }
+.topbar-settings .ts-icon { font-size: 16px; line-height: 1; }
 
 /* ---------- Main ---------- */
 main {
@@ -327,24 +350,43 @@ td.ka-note .cell .nt { font-size: 11px; font-weight: 600; }
   border-radius: var(--radius); border: 1px solid var(--line);
   box-shadow: 0 12px 40px rgba(0,0,0,.28); margin: auto;
   animation: pop .12s ease-out;
+  /* Flex-Kind: ohne min-width:0 wächst das Fenster auf die Mindestbreite
+     seines Inhalts (z. B. eines Datumsfelds) und läuft aus dem Bild. */
+  min-width: 0;
 }
 @keyframes pop { from { transform: translateY(6px); opacity: .6; } to { transform: none; opacity: 1; } }
 .modal-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px; border-bottom: 1px solid var(--line-soft); }
 .modal-head h2 { font-size: 18px; }
-.modal-body { padding: 18px; }
+.modal-body { padding: 18px; min-width: 0; }
 .modal-foot { padding: 14px 18px; border-top: 1px solid var(--line-soft); display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap; }
 
 .field { margin-bottom: 14px; }
 .field label { display: block; font-size: 13px; font-weight: 600; color: var(--ink-soft); margin-bottom: 5px; }
 .field .hint { font-size: 12px; color: var(--ink-faint); margin-top: 4px; }
-input[type=text], input[type=date], input[type=number], select, textarea {
-  width: 100%; font: inherit; font-size: 16px; color: var(--ink);
+input[type=text], input[type=date], input[type=time], input[type=number], select, textarea {
+  width: 100%; max-width: 100%; min-width: 0;
+  font: inherit; font-size: 16px; color: var(--ink);
   border: 1px solid var(--line); border-radius: var(--radius);
   padding: 10px 12px; background: #fff; min-height: var(--tap);
 }
 textarea { min-height: 96px; resize: vertical; line-height: 1.5; }
 input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
-.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+/* Datums-/Zeitfelder: WebKit gibt ihnen eine eigene Mindestbreite und zentriert
+   den Wert — dadurch laufen sie aus schmalen Containern (Modal, Grid) heraus. */
+input[type=date], input[type=time] { -webkit-appearance: none; appearance: none; }
+input[type=date]::-webkit-date-and-time-value,
+input[type=time]::-webkit-date-and-time-value { text-align: left; }
+input[type=date]::-webkit-calendar-picker-indicator,
+input[type=time]::-webkit-calendar-picker-indicator { flex: none; margin-left: auto; }
+input[type=range] { width: 100%; min-width: 0; }
+
+/* Grid-Zeilen: Kinder dürfen unter ihre Inhaltsbreite schrumpfen, statt das
+   Raster (und damit das Fenster) aufzuweiten. */
+.row2 > *, .period-row > *, .task-edit > *, .scheme-row > *, .todo-add > *, .dt-info > * { min-width: 0; }
+
+/* bricht selbst um, sobald der Container zu schmal wird — nicht erst beim Viewport */
+.row2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 176px), 1fr)); gap: 12px; }
 .row2 .field { margin-bottom: 0; }
 
 .weight-view { display:flex; align-items:center; gap: 8px; font-size: 14px; }
@@ -392,22 +434,12 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 /* ============================================================
    Phase 6 — Stundenplan, Todos, Termine
    ============================================================ */
-/* Seiten-Navigation (Reiter oben) */
-.mainnav { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 18px; }
-.mainnav .mn {
-  appearance: none; font: inherit; font-weight: 650; font-size: 15px;
-  border: 1px solid var(--line); background: var(--card); color: var(--ink-soft);
-  min-height: 40px; padding: 0 16px; border-radius: var(--radius); cursor: pointer;
-  display: inline-flex; align-items: center; gap: 8px;
-}
-.mainnav .mn:hover { border-color: var(--ink-faint); color: var(--ink); }
-.mainnav .mn.active { background: var(--accent); border-color: var(--accent-ink); color: #fff; }
+/* Zähler-Badge (offene Todos) in der Topbar-Navigation */
 .nav-badge {
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px;
   background: var(--amber); color: #fff; font-size: 12px; font-weight: 700;
 }
-.mainnav .mn.active .nav-badge { background: rgba(255,255,255,.25); }
 
 /* ---------- Stundenplan ---------- */
 .tt-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); box-shadow: var(--shadow); -webkit-overflow-scrolling: touch; }
@@ -451,7 +483,8 @@ td.tt-cell.tt-editable.tt-today { background: #eef6f2; }
 }
 .tt-add:hover { background: var(--accent-soft); }
 
-.period-row { display: grid; grid-template-columns: 1fr 1fr 1fr 44px; gap: 8px; align-items: center; margin-bottom: 8px; }
+.period-row, .period-head { display: grid; grid-template-columns: minmax(60px, .7fr) 1fr 1fr 44px; gap: 8px; align-items: center; }
+.period-row { margin-bottom: 8px; }
 .period-row input { min-height: 40px; }
 
 /* ---------- Todos ---------- */
@@ -495,10 +528,24 @@ td.tt-cell.tt-editable.tt-today { background: #eef6f2; }
 .backup-hint.due { color: var(--amber); }
 .backup-hint .bh-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--amber); flex: none; }
 
+@media (max-width: 720px) {
+  .topbar-settings .ts-label { display: none; }
+  .topbar-settings { padding: 0 12px; }
+}
+
 @media (max-width: 560px) {
   .row2 { grid-template-columns: 1fr; }
   .page-head h1 { font-size: 22px; }
   main { padding: 16px 12px 90px; }
   .todo-add { grid-template-columns: 1fr; }
   table.tt { min-width: 520px; }
+  /* Bezeichnung in eigene Zeile, damit die Zeitfelder nicht zusammengedrückt werden */
+  .period-row, .period-head { grid-template-columns: 1fr 1fr 44px; }
+  .period-row .pr-label, .period-head .ph-label { grid-column: 1 / -1; }
+}
+
+@media (max-width: 430px) {
+  .topbar { gap: 6px; padding-left: 12px; padding-right: 12px; }
+  .brand-mark { font-size: 20px; }
+  .topnav .tn { padding: 0 9px; font-size: 14px; gap: 5px; }
 }
