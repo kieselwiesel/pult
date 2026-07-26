@@ -766,7 +766,7 @@ function renderTopbarRight() {
     el.innerHTML = `<button class="btn ghost small" id="btnBack">‹ Kurs</button>`;
     document.getElementById('btnBack').onclick = () => go({ name: 'course', courseId: route.courseId });
   } else {
-    el.innerHTML = `<button class="btn ghost small topbar-settings" id="btnSettings" title="Einstellungen" aria-label="Einstellungen"><span class="ts-icon" aria-hidden="true">⚙</span><span class="ts-label">Einstellungen</span></button>`;
+    el.innerHTML = `<button class="btn ghost small topbar-settings" id="btnSettings">Einstellungen</button>`;
     document.getElementById('btnSettings').onclick = openMetaSettings;
   }
 }
