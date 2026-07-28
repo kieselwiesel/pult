@@ -427,6 +427,24 @@ input[type=range] { width: 100%; min-width: 0; }
 
 .notice { background: #fff; border: 1px dashed var(--line); border-radius: var(--radius); padding: 12px 14px; font-size: 14px; color: var(--ink-soft); margin-bottom: 14px; }
 
+/* ---------- Zurück (fest unten links) ---------- */
+.backfab {
+  position: fixed; z-index: 60;
+  left: max(16px, env(safe-area-inset-left));
+  bottom: max(16px, env(safe-area-inset-bottom));
+  appearance: none; font: inherit; cursor: pointer;
+  width: 42px; height: 42px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--accent-ink); border-radius: var(--radius);
+  background: var(--accent); color: #fff;
+  box-shadow: 0 4px 14px rgba(28,33,40,.22);
+  transition: background .12s, transform .05s;
+}
+.backfab[hidden] { display: none; }
+.backfab:hover { background: var(--accent-ink); }
+.backfab:active { transform: translateY(1px); }
+.backfab svg { display: block; margin-left: -1px; }   /* Pfeilspitze optisch mittig */
+
 /* Toast */
 .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 12px 18px; border-radius: var(--radius); font-size: 14px; font-weight: 600; z-index: 200; box-shadow: 0 6px 20px rgba(0,0,0,.3); animation: pop .12s; }
 
@@ -513,6 +531,60 @@ td.tt-cell.tt-editable.tt-today { background: #eef6f2; }
 /* ---------- Termine ---------- */
 .chip.termin { border-left: 4px solid var(--accent); }
 .termin-note { font-size: 12px; color: var(--ink-faint); margin-top: 3px; white-space: pre-wrap; }
+
+/* ---------- Kurzinfo („i" neben dem Namen) ---------- */
+.info-i {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 16px; height: 16px; margin-left: 6px; vertical-align: middle; cursor: pointer;
+  border: 1px solid var(--accent); border-radius: 50%;
+  background: var(--accent-soft); color: var(--accent-ink);
+  font-size: 11px; font-weight: 700; font-style: normal; line-height: 1;
+}
+.info-i:hover { background: var(--accent); color: #fff; }
+.notice.info-note { border-style: solid; border-color: var(--accent); color: var(--ink); white-space: pre-wrap; }
+.info-text { white-space: pre-wrap; font-size: 15px; }
+
+/* ---------- Sitzplan ---------- */
+.seat-board { border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); box-shadow: var(--shadow); padding: 12px; overflow-x: auto; }
+/* Tafel steht unten — der Plan wird aus Sicht der Lehrkraft gelesen */
+.seat-front {
+  border: 1px solid var(--line); border-top: 3px solid var(--accent);
+  background: #f7f8fa; color: var(--ink-soft);
+  font-size: 12px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase;
+  text-align: center; padding: 7px 0; margin-top: 12px; border-radius: var(--radius);
+}
+/* Tische bleiben schmal, auch wenn das Raster nur wenige Spalten hat */
+.seat-grid { display: grid; gap: 8px; min-width: max-content; justify-content: center; }
+.seat {
+  appearance: none; font: inherit; cursor: pointer; text-align: left;
+  min-height: 62px; padding: 7px 9px; border-radius: var(--radius);
+  border: 1px solid var(--line); border-left: 4px solid var(--accent);
+  background: var(--card); color: var(--ink);
+  display: flex; flex-direction: column; justify-content: center; gap: 1px; overflow: hidden;
+  transition: filter .1s, box-shadow .1s;
+}
+.seat:hover { box-shadow: 0 2px 8px rgba(28,33,40,.12); border-color: var(--ink-faint); }
+.seat:active { transform: translateY(1px); }
+.seat .seat-name { font-weight: 700; font-size: 14px; line-height: 1.15; display: flex; align-items: center; min-width: 0; }
+.seat .seat-last { font-size: 12px; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.seat .seat-val {
+  align-self: flex-start; margin-top: 4px; padding: 1px 7px; border-radius: var(--radius);
+  border: 1px solid var(--line-soft); font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums;
+}
+.seat.good { border-left-color: var(--g-top); background: var(--g-good); }
+.seat.bad { border-left-color: var(--g-fail); background: var(--g-low); }
+.seat.moving { outline: 3px solid var(--accent); outline-offset: -1px; }
+.seat.empty {
+  border: 1px dashed var(--line); background: transparent;
+  color: var(--line); font-size: 20px; font-weight: 600;
+  align-items: center; justify-content: center;
+}
+.seat.empty:hover { background: var(--accent-soft); color: var(--accent); box-shadow: none; }
+.seat.empty.target { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+/* freier Platz außerhalb des Bearbeiten-Modus: nur Lücke, nicht anfassbar */
+.seat.empty.void { cursor: default; opacity: .45; }
+.seat.empty.void:hover { background: transparent; box-shadow: none; }
+.seat-pool { max-width: 100%; }
 
 /* ---------- Backup-Hinweis (Startseite, unaufdringlich) ---------- */
 .backup-hint {

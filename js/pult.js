@@ -178,7 +178,8 @@ function newCourse(subject, className) {
     weightWritten: 40, weightOral: 60,
     weightHY1: 30, weightHY2: 70,     // Endjahresnote
     haLog: [],                        // Hausaufgaben-Protokoll: [{id,date,marks:{sId:'malus'|'bonus'}}]
-    students: [],
+    seating: null,                    // Sitzplan: { cols, rows, seats: { "x,y": studentId } }
+    students: [],                     // { id, firstName, lastName, entry, exit, info }
     halfYears: {
       '1': { columns: [], sonstige: [] },
       '2': { columns: [], sonstige: [] },
@@ -469,6 +470,44 @@ function migrateHaLog() {
   if (changed) save();
 }
 
+/* ---------- Kurzinfo pro Schüler:in ----------
+   Eine kurze Notiz am Schülerdatensatz (z. B. Nachteilsausgleich). Sie erscheint
+   als kleines „i" neben dem Namen: Hover zeigt den Text, Antippen öffnet ihn
+   (auf dem iPad gibt es kein Hover). Getrennt von den datierten Notizen. */
+function infoBadge(s) {
+  if (!s || !s.info) return '';
+  return `<span class="info-i" data-info="${s.id}" title="${esc(s.info)}" role="button" aria-label="Kurzinfo">i</span>`;
+}
+/* Klick auf die „i"-Marken innerhalb eines Containers verdrahten */
+function bindInfoBadges(root, c) {
+  (root || document).querySelectorAll('.info-i[data-info]').forEach(el => el.onclick = ev => {
+    ev.stopPropagation();
+    const s = c.students.find(x => x.id === el.dataset.info);
+    if (s) openInfoView(c, s);
+  });
+}
+function studentName(s) { return `${s.firstName} ${s.lastName || ''}`.trim(); }
+function openInfoView(c, s) {
+  modal(`Kurzinfo — ${studentName(s)}`, `<div class="info-text">${esc(s.info)}</div>`, [
+    { label: 'Bearbeiten', onClick: () => openInfoEdit(c, s) },
+    { label: 'Schließen', cls: 'primary', onClick: closeModal },
+  ]);
+}
+function openInfoEdit(c, s, onDone) {
+  modal(`Kurzinfo — ${studentName(s)}`, `
+    <div class="field"><label>Kurzinfo</label>
+      <textarea id="siInfo" placeholder="z. B. Nachteilsausgleich: 25 % Zeitzuschlag, größere Schrift">${esc(s.info || '')}</textarea>
+      <div class="hint">Erscheint als „i" neben dem Namen — in der Notentabelle, bei Klassenarbeiten und im Sitzplan. Leer lassen entfernt die Info.</div>
+    </div>
+  `, [
+    { label: 'Abbrechen', onClick: closeModal },
+    { label: 'Speichern', cls: 'primary', onClick: () => {
+      s.info = val('siInfo').trim();
+      save(); closeModal(); (onDone || render)();
+    }},
+  ]);
+}
+
 /* ---------- Klassenarbeit ---------- */
 function schemeGrade(scheme, percent) {
   if (percent == null) return null;
@@ -503,7 +542,27 @@ function median(arr) {
 
 /* ---------- Routing ---------- */
 let route = { name: 'home', courseId: null, hy: '1', view: 'simpel' };
-function go(r) { route = Object.assign({}, route, r); render(); }
+/* Seitenverlauf für den „Zurück"-Knopf unten links. Gestapelt wird nur bei
+   echtem Seitenwechsel — Reiter, Halbjahr oder Ansicht bleiben eine Seite. */
+let navStack = [];
+function samePage(a, b) {
+  return a.name === b.name && a.courseId === b.courseId &&
+         a.studentId === b.studentId && a.columnId === b.columnId;
+}
+function go(r) {
+  const next = Object.assign({}, route, r);
+  if (!samePage(next, route)) {
+    navStack.push(route);
+    if (navStack.length > 40) navStack.shift();
+  }
+  route = next;
+  render();
+}
+function goBack() {
+  if (!navStack.length) return;
+  route = navStack.pop();
+  render();
+}
 
 /* ---------- Datum ---------- */
 function fmtDate(iso) { if (!iso) return ''; const [y,m,d] = iso.split('-'); return `${d}.${m}.`; }
@@ -687,7 +746,8 @@ function pseudonymizeData(d) {
     const ordered = (c.students || []).slice().sort((a, b) =>
       (a.lastName || '').localeCompare(b.lastName || '', 'de') ||
       (a.firstName || '').localeCompare(b.firstName || '', 'de'));
-    ordered.forEach((s, i) => { s.firstName = String(i + 1).padStart(2, '0'); s.lastName = ''; });
+    /* Kurzinfos (z. B. Nachteilsausgleich) sind personenbezogen und fliegen mit raus */
+    ordered.forEach((s, i) => { s.firstName = String(i + 1).padStart(2, '0'); s.lastName = ''; s.info = ''; });
   });
   return d;
 }
@@ -728,8 +788,10 @@ const app = () => document.getElementById('app');
 function render() {
   renderTopNav();
   renderTopbarRight();
+  renderBackFab();
   if (route.name === 'ka') return renderKA();
   if (route.name === 'ha') return renderHaPage();
+  if (route.name === 'seating') return renderSeating();
   if (route.name === 'student') return renderStudent();
   if (route.name === 'course') return renderCourse();
   if (route.name === 'courses') return renderCourses();
@@ -746,7 +808,7 @@ const TOP_PAGES = [
   { name: 'termine', label: 'Termine' },
 ];
 /* Unterseiten eines Kurses gehören navigatorisch zu „Kurse" */
-const COURSE_SUBPAGES = ['course', 'student', 'ka', 'ha'];
+const COURSE_SUBPAGES = ['course', 'student', 'ka', 'ha', 'seating'];
 function navActive() { return COURSE_SUBPAGES.includes(route.name) ? 'courses' : route.name; }
 
 function renderTopNav() {
@@ -760,15 +822,15 @@ function renderTopNav() {
   el.querySelectorAll('.tn').forEach(b => b.onclick = () => go({ name: b.dataset.nav }));
 }
 function renderTopbarRight() {
+  /* Zurück liegt unten links (backFab), oben rechts stehen die Einstellungen — auf jeder Seite. */
   const el = document.getElementById('topbarRight');
-  /* Tiefe Kursseiten: zurück zum Kurs. Sonst führt die Navigation schon zurück. */
-  if (route.name === 'ka' || route.name === 'student' || route.name === 'ha') {
-    el.innerHTML = `<button class="btn ghost small" id="btnBack">‹ Kurs</button>`;
-    document.getElementById('btnBack').onclick = () => go({ name: 'course', courseId: route.courseId });
-  } else {
-    el.innerHTML = `<button class="btn ghost small topbar-settings" id="btnSettings">Einstellungen</button>`;
-    document.getElementById('btnSettings').onclick = openMetaSettings;
-  }
+  el.innerHTML = `<button class="btn ghost small topbar-settings" id="btnSettings">Einstellungen</button>`;
+  document.getElementById('btnSettings').onclick = openMetaSettings;
+}
+/* „Zurück" nur zeigen, wenn es eine vorherige Seite gibt */
+function renderBackFab() {
+  const el = document.getElementById('backFab');
+  if (el) el.hidden = !navStack.length;
 }
 function findKaColumn(c) {
   if (!c) return null;
@@ -1183,6 +1245,7 @@ function renderCourse() {
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn small" id="btnZwischen">+ Zwischenstand</button>
+        <button class="btn small" id="btnSeating" title="Sitzplan">${SEAT_ICON} Sitzplan</button>
         <button class="btn small" id="btnStudents">Schüler:innen</button>
         <button class="btn small" id="btnMore">Mehr</button>
       </div>
@@ -1224,6 +1287,7 @@ function renderCourse() {
   document.querySelectorAll('.tab').forEach(t => t.onclick = () => go({ hy: t.dataset.hy }));
   document.querySelectorAll('#viewSeg button').forEach(b => b.onclick = () => go({ view: b.dataset.v }));
   document.getElementById('btnStudents').onclick = () => openStudents(c);
+  document.getElementById('btnSeating').onclick = () => { seatPending = null; go({ name: 'seating', courseId: c.id, seatMode: initialSeatMode(c) }); };
   document.getElementById('btnZwischen').onclick = () => createZwischenstand(c);
   document.getElementById('btnMore').onclick = () => openMoreMenu(c);
   document.getElementById('btnAddSchrift').onclick = () => openColumnForm(c, 'schriftlich');
@@ -1352,10 +1416,13 @@ function renderStudent() {
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn small" id="sdSim">Was brauche ich noch?</button>
+        <button class="btn small" id="sdInfo">Kurzinfo</button>
         <button class="btn small" id="sdNotes">Notizen</button>
         <button class="btn small" id="sdEdit">Stammdaten</button>
       </div>
     </div>
+
+    ${s.info ? `<div class="notice info-note"><span class="info-i" title="Kurzinfo">i</span> ${esc(s.info)}</div>` : ''}
 
     <div class="calc-block">
       <h3>Notenverlauf (mündlich)</h3>
@@ -1380,6 +1447,7 @@ function renderStudent() {
   `;
 
   document.getElementById('sdEdit').onclick = () => openStudentForm(c, s.id);
+  document.getElementById('sdInfo').onclick = () => openInfoEdit(c, s, () => renderStudent());
   document.getElementById('sdSim').onclick = () => openSimulator(c, s.id);
   document.getElementById('sdNotes').onclick = () => openNotes(c, s.id);
   app().querySelectorAll('.sd-grade').forEach(row => row.onclick = () => {
@@ -1474,7 +1542,7 @@ function renderKaEingabe(c, col) {
       `<td class="ka-input"><input type="number" min="0" max="${t.max}" step="0.5" inputmode="decimal"
          data-s="${s.id}" data-task="${t.id}" value="${pts[t.id] != null ? pts[t.id] : ''}"></td>`).join('');
     return `<tr>
-      <td class="col-name"><span class="sname">${esc(s.firstName)} ${esc(s.lastName||'')}</span></td>
+      <td class="col-name"><span class="sname">${esc(s.firstName)} ${esc(s.lastName||'')}${infoBadge(s)}</span></td>
       ${cells}
       <td class="ka-sum" data-sum="${s.id}"><div class="cell">${tot.achieved==null?'–':fmtNum(tot.achieved)}/${maxTotal}</div></td>
       <td class="ka-pct" data-pct="${s.id}"><div class="cell">${tot.percent==null?'–':Math.round(tot.percent)+'%'}</div></td>
@@ -1512,6 +1580,7 @@ function renderKaEingabe(c, col) {
       save();
     };
   });
+  bindInfoBadges(body, c);
 }
 function kaNoteCell(grade, scale) {
   scale = scale || 'punkte';
@@ -1806,7 +1875,7 @@ function renderTable(c) {
     const gradeTd = col => `<td class="grade-cell" data-s="${s.id}" data-col="${col.id}">${cell(gr[col.id])}</td>`;
     const haTd = () => { const hc = haCounts(c, s.id); return `<td class="ha-cell"><div class="cell">${hc.gemacht} <span style="color:${hc.nicht?'var(--g-fail)':'var(--ink-faint)'}">/ ${hc.nicht}</span></div></td>`; };
     const zwTd = col => `<td class="prev-cell"><div class="cell">${fmtGrade((col.values||{})[s.id], scale, true)}</div></td>`;
-    let tr = `<tr class="${studentActive(s)?'':'inactive'}"><td class="col-name"><span class="sname sname-link" data-student="${s.id}">${esc(s.firstName)} ${esc(s.lastName||'')}${blind}${s.exit?' <small>(aus)</small>':''}</span>${spark}</td>`;
+    let tr = `<tr class="${studentActive(s)?'':'inactive'}"><td class="col-name"><span class="sname sname-link" data-student="${s.id}">${esc(s.firstName)} ${esc(s.lastName||'')}${blind}${s.exit?' <small>(aus)</small>':''}${infoBadge(s)}</span>${spark}</td>`;
     if (isSimpel) {
       if (inverted) {
         tr += `<td class="final sep-final" data-final="gesamt" data-s="${s.id}">${finalCell(effGesamt(c, route.hy, s.id), trendArrowSvg(trendDir(c, route.hy, s.id)))}</td>`;
@@ -1886,6 +1955,7 @@ function renderTable(c) {
     td.onclick = () => openCalc(c, td.dataset.s, td.dataset.final));
   host.querySelectorAll('.sname-link').forEach(el =>
     el.onclick = () => go({ name: 'student', courseId: c.id, studentId: el.dataset.student }));
+  bindInfoBadges(host, c);
   host.querySelectorAll('.zw-head').forEach(th =>
     th.onclick = () => openZwischenstand(c, th.dataset.zw));
 
@@ -2224,6 +2294,295 @@ function openHaSession(c, sessId) {
   draw();
 }
 
+/* ============================================================
+   Sitzplan — Raster, auf das Tische mit Namen gesetzt werden.
+   Drei Modi: „Plan" (anordnen), „Note" (mündliche Note direkt eintragen),
+   „Hausaufgaben" (Erhebung direkt pflegen).
+   ============================================================ */
+const SEAT_MODES = ['note', 'ha', 'plan'];
+/* Icon für den Sitzplan: vier Tische, darunter die Tafel */
+const SEAT_ICON = `<svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="square">
+  <rect x="1.4" y="1.6" width="4.4" height="3"/><rect x="10.2" y="1.6" width="4.4" height="3"/>
+  <rect x="1.4" y="6.6" width="4.4" height="3"/><rect x="10.2" y="6.6" width="4.4" height="3"/>
+  <path d="M2.6 13.6h10.8" stroke-width="2"/></svg>`;
+/* Einstieg: solange noch niemand sitzt, direkt in den Bearbeiten-Modus */
+function initialSeatMode(c) {
+  return c.seating && Object.keys(c.seating.seats || {}).length ? 'note' : 'plan';
+}
+/* offene Aktion: ein Platz wird verschoben oder ein:e Schüler:in wartet auf einen Platz */
+let seatPending = null;   // { type:'move', key } | { type:'student', id }
+
+function ensureSeating(c) {
+  if (!c.seating || typeof c.seating !== 'object') c.seating = { cols: 6, rows: 5, seats: {} };
+  if (!c.seating.seats) c.seating.seats = {};
+  c.seating.cols = clamp(Number(c.seating.cols) || 6, 1, 12);
+  c.seating.rows = clamp(Number(c.seating.rows) || 5, 1, 12);
+  return c.seating;
+}
+function seatKey(x, y) { return `${x},${y}`; }
+function seatStudent(c, key) {
+  const id = ensureSeating(c).seats[key];
+  return id ? c.students.find(s => s.id === id) : null;
+}
+function unseatedStudents(c) {
+  const taken = new Set(Object.values(ensureSeating(c).seats).filter(Boolean));
+  return c.students.filter(s => studentActive(s) && !taken.has(s.id));
+}
+/* Plätze, die nach dem Verkleinern des Rasters außerhalb liegen */
+function seatsOutside(st) {
+  return Object.keys(st.seats).filter(k => {
+    const [x, y] = k.split(',').map(Number);
+    return x >= st.cols || y >= st.rows;
+  });
+}
+
+function renderSeating() {
+  const c = getCourse(route.courseId);
+  if (!c) return go({ name: 'home' });
+  const st = ensureSeating(c);
+  const mode = SEAT_MODES.includes(route.seatMode) ? route.seatMode : initialSeatMode(c);
+  const hy = c.halfYears[route.hy];
+  const muendCols = hy.columns.filter(x => x.type === 'muendlich');
+  const noteCol = muendCols.find(x => x.id === route.seatCol) || muendCols[muendCols.length - 1] || null;
+  const sessions = (c.haLog || []).slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  const sess = sessions.find(x => x.id === route.seatSess) || sessions[0] || null;
+  const offen = unseatedStudents(c);
+
+  let tools = '', hint = '';
+  if (mode === 'plan') {
+    tools = `<button class="btn small" id="spGrid">Raster ${st.cols} × ${st.rows}</button>
+      <button class="btn small" id="spFill">Automatisch füllen</button>
+      <button class="btn small danger" id="spClear">Plan leeren</button>`;
+    hint = seatPending
+      ? 'Jetzt auf den Zielplatz tippen. Ist er besetzt, tauschen die beiden.'
+      : 'Freier Platz antippen = Tisch mit Namen anlegen. Besetzter Platz = verschieben, räumen, Kurzinfo.';
+  } else if (mode === 'note') {
+    tools = `<select id="spCol" aria-label="Notenspalte" style="width:auto;min-width:190px">
+        ${muendCols.map(col => `<option value="${col.id}" ${noteCol && col.id === noteCol.id ? 'selected' : ''}>${esc(col.label)}${col.date ? ' · ' + fmtDate(col.date) : ''}</option>`).join('') || '<option>keine mündliche Spalte</option>'}
+      </select>
+      <button class="btn small" id="spNewCol">+ Mitarbeit heute</button>`;
+    hint = noteCol
+      ? `Antippen trägt die Note in <b>${esc(noteCol.label)}</b> ein (${route.hy}. Halbjahr).`
+      : 'Noch keine mündliche Spalte in diesem Halbjahr — lege „Mitarbeit heute" an.';
+  } else {
+    tools = `<select id="spSess" aria-label="Erhebung" style="width:auto;min-width:190px">
+        ${sessions.map(x => `<option value="${x.id}" ${sess && x.id === sess.id ? 'selected' : ''}>${fmtDateLong(x.date) || 'ohne Datum'}</option>`).join('') || '<option>keine Erhebung</option>'}
+      </select>
+      <button class="btn small" id="spNewSess">+ Erhebung heute</button>`;
+    hint = sess
+      ? 'Antippen wechselt: neutral → nicht gemacht → gemacht.'
+      : 'Noch keine Erhebung — lege eine für heute an.';
+  }
+
+  let cells = '';
+  for (let y = 0; y < st.rows; y++) {
+    for (let x = 0; x < st.cols; x++) {
+      const key = seatKey(x, y);
+      const s = seatStudent(c, key);
+      if (!s) {
+        /* Plätze vergeben nur im Bearbeiten-Modus — sonst bleibt die Lücke stumm */
+        cells += mode === 'plan'
+          ? `<button class="seat empty ${seatPending ? 'target' : ''}" data-key="${key}" aria-label="freier Platz">+</button>`
+          : `<div class="seat empty void" aria-hidden="true"></div>`;
+        continue;
+      }
+      let extra = '', cls = '';
+      if (mode === 'note') {
+        const v = noteCol ? (data.grades[s.id] || {})[noteCol.id] : null;
+        const gc = gradeColor(v);
+        const bg = gc.bg === 'transparent' ? '#fff' : gc.bg;
+        const fg = gc.fg === 'var(--line)' ? 'var(--ink-faint)' : gc.fg;
+        extra = `<span class="seat-val" style="background:${bg};color:${fg}">${v == null ? '·' : fmtGrade(v, c.scale, false)}</span>`;
+      } else if (mode === 'ha') {
+        const mk = sess ? (sess.marks || {})[s.id] : null;
+        cls = mk === 'malus' ? 'bad' : mk === 'bonus' ? 'good' : '';
+        extra = `<span class="seat-val">${mk === 'malus' ? 'fehlt' : mk === 'bonus' ? 'gemacht' : '·'}</span>`;
+      }
+      const blind = mode !== 'ha' && blindSpot(c, route.hy, s.id) ? '<span class="blind-dot" title="keine aktuelle mündliche Note"></span>' : '';
+      const moving = seatPending && seatPending.type === 'move' && seatPending.key === key ? 'moving' : '';
+      cells += `<button class="seat ${cls} ${moving}" data-key="${key}">
+        <span class="seat-name">${esc(s.firstName)}${blind}${infoBadge(s)}</span>
+        <span class="seat-last">${esc(s.lastName || '')}</span>
+        ${extra}</button>`;
+    }
+  }
+
+  const pool = offen.map(s => `<button class="btn small seat-pool ${seatPending && seatPending.type === 'student' && seatPending.id === s.id ? 'primary' : ''}" data-pool="${s.id}">${esc(s.firstName)} ${esc(s.lastName || '')}</button>`).join('');
+
+  app().innerHTML = `
+    <div class="page-head">
+      <div><h1>Sitzplan</h1>
+        <div class="sub">${esc(c.subject)} ${esc(c.className)} · ${c.students.filter(studentActive).length - offen.length} von ${c.students.filter(studentActive).length} platziert</div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">${tools}</div>
+    </div>
+
+    <div class="tabs">
+      <button class="tab ${mode==='note'?'active':''}" data-sm="note">Mündlich</button>
+      <button class="tab ${mode==='ha'?'active':''}" data-sm="ha">Hausaufgaben</button>
+      <button class="tab ${mode==='plan'?'active':''}" data-sm="plan">Plan bearbeiten</button>
+    </div>
+
+    <div class="notice">${hint}</div>
+
+    ${c.students.length ? `
+      <div class="seat-board">
+        <div class="seat-grid" style="grid-template-columns:repeat(${st.cols}, minmax(74px, 116px))">${cells}</div>
+        <div class="seat-front">Tafel · Pult</div>
+      </div>
+      ${offen.length && mode === 'plan' ? `<div class="calc-block" style="margin-top:16px"><h3>Ohne Platz (${offen.length})</h3>
+        <div class="cs-sub" style="margin-bottom:8px">Antippen, dann auf einen Platz im Raster tippen.</div>
+        <div class="chip-wrap">${pool}</div></div>` : ''}
+    ` : `<div class="empty-state"><p>Noch keine Schüler:innen in diesem Kurs.</p></div>`}
+  `;
+
+  app().querySelectorAll('.tab').forEach(t => t.onclick = () => { seatPending = null; go({ seatMode: t.dataset.sm }); });
+
+  const gEl = document.getElementById('spGrid'); if (gEl) gEl.onclick = () => openSeatGrid(c);
+  const fEl = document.getElementById('spFill'); if (fEl) fEl.onclick = () => seatingAutoFill(c);
+  const cEl = document.getElementById('spClear'); if (cEl) cEl.onclick = () => {
+    modal('Plan leeren?', `<p>Alle Tische dieses Sitzplans werden entfernt. Noten und Hausaufgaben bleiben unberührt.</p>`, [
+      { label: 'Abbrechen', onClick: closeModal },
+      { label: 'Leeren', cls: 'danger', onClick: () => { st.seats = {}; seatPending = null; save(); closeModal(); renderSeating(); } },
+    ]);
+  };
+  const colSel = document.getElementById('spCol');
+  if (colSel) colSel.onchange = () => go({ seatCol: colSel.value });
+  const newCol = document.getElementById('spNewCol');
+  if (newCol) newCol.onclick = () => {
+    let col = hy.columns.find(x => x.type === 'muendlich' && x.label === 'Mitarbeit' && x.date === todayISO());
+    if (!col) { col = { id: uid(), type: 'muendlich', label: 'Mitarbeit', date: todayISO() }; hy.columns.push(col); save(); }
+    go({ seatCol: col.id });
+  };
+  const sessSel = document.getElementById('spSess');
+  if (sessSel) sessSel.onchange = () => go({ seatSess: sessSel.value });
+  const newSess = document.getElementById('spNewSess');
+  if (newSess) newSess.onclick = () => {
+    let x = (c.haLog || []).find(o => o.date === todayISO());
+    if (!x) { x = { id: uid(), date: todayISO(), marks: {} }; c.haLog.push(x); save(); }
+    go({ seatSess: x.id });
+  };
+
+  app().querySelectorAll('.seat-pool').forEach(b => b.onclick = () => {
+    const id = b.dataset.pool;
+    seatPending = (seatPending && seatPending.type === 'student' && seatPending.id === id) ? null : { type: 'student', id };
+    renderSeating();
+  });
+
+  app().querySelectorAll('button.seat').forEach(btn => btn.onclick = () => {
+    const key = btn.dataset.key;
+    const s = seatStudent(c, key);
+    if (mode === 'plan') {
+      if (seatPending) return resolveSeatPending(c, key);
+      return s ? openSeatMenu(c, key) : openSeatAssign(c, key);
+    }
+    if (mode === 'note') {
+      if (!noteCol) return toast('Erst eine mündliche Spalte anlegen.');
+      return openPad(`${studentName(s)} — ${noteCol.label}`, (data.grades[s.id] || {})[noteCol.id], v => {
+        if (!data.grades[s.id]) data.grades[s.id] = {};
+        if (v == null) delete data.grades[s.id][noteCol.id]; else data.grades[s.id][noteCol.id] = v;
+        save(); renderSeating();
+      }, c.scale);
+    }
+    if (!sess) return toast('Erst eine Erhebung anlegen.');
+    sess.marks = sess.marks || {};
+    const mk = sess.marks[s.id];
+    if (!mk) sess.marks[s.id] = 'malus';
+    else if (mk === 'malus') sess.marks[s.id] = 'bonus';
+    else delete sess.marks[s.id];
+    save(); renderSeating();
+  });
+
+  bindInfoBadges(app(), c);
+}
+
+/* offene Aktion auf einen Zielplatz anwenden */
+function resolveSeatPending(c, key) {
+  const st = ensureSeating(c);
+  const p = seatPending;
+  seatPending = null;
+  if (!p) return renderSeating();
+  if (p.type === 'student') {
+    st.seats[key] = p.id;                       // besetzter Platz: bisherige:r rückt in die Liste „ohne Platz"
+  } else {
+    const from = p.key;
+    if (from !== key) {
+      const a = st.seats[from], b = st.seats[key];
+      if (b) st.seats[from] = b; else delete st.seats[from];
+      st.seats[key] = a;
+    }
+  }
+  save(); renderSeating();
+}
+
+function openSeatAssign(c, key) {
+  const offen = unseatedStudents(c);
+  const list = offen.map(s => `<button class="btn small" style="width:100%" data-pick="${s.id}">${esc(s.firstName)} ${esc(s.lastName || '')}</button>`).join('')
+    || `<div class="notice">Alle aktiven Schüler:innen sitzen schon.</div>`;
+  modal('Wer sitzt hier?', `<div class="chip-list">${list}</div>`, [{ label: 'Abbrechen', onClick: closeModal }]);
+  document.querySelectorAll('[data-pick]').forEach(b => b.onclick = () => {
+    ensureSeating(c).seats[key] = b.dataset.pick;
+    save(); closeModal(); renderSeating();
+  });
+}
+
+function openSeatMenu(c, key) {
+  const s = seatStudent(c, key);
+  if (!s) return;
+  modal(studentName(s), `
+    ${s.info ? `<div class="notice info-note"><span class="info-i">i</span> ${esc(s.info)}</div>` : ''}
+    <div class="chip-list">
+      <button class="btn primary" style="width:100%" id="smMove">Platz tauschen / verschieben</button>
+      <button class="btn" style="width:100%" id="smInfo">Kurzinfo bearbeiten</button>
+      <button class="btn" style="width:100%" id="smOpen">Schüler:in öffnen</button>
+      <button class="btn danger" style="width:100%" id="smFree">Platz räumen</button>
+    </div>`, [{ label: 'Abbrechen', onClick: closeModal }]);
+  document.getElementById('smMove').onclick = () => {
+    seatPending = { type: 'move', key };
+    closeModal(); renderSeating();
+    toast('Jetzt Zielplatz antippen.');
+  };
+  document.getElementById('smInfo').onclick = () => openInfoEdit(c, s, () => renderSeating());
+  document.getElementById('smOpen').onclick = () => { closeModal(); go({ name: 'student', studentId: s.id }); };
+  document.getElementById('smFree').onclick = () => {
+    delete ensureSeating(c).seats[key];
+    save(); closeModal(); renderSeating();
+  };
+}
+
+function openSeatGrid(c) {
+  const st = ensureSeating(c);
+  modal('Raster', `
+    <div class="row2">
+      <div class="field"><label>Spalten (nach rechts)</label><input id="sgCols" type="number" min="1" max="12" value="${st.cols}"></div>
+      <div class="field"><label>Reihen (hinten → vorn)</label><input id="sgRows" type="number" min="1" max="12" value="${st.rows}"></div>
+    </div>
+    <div class="hint">Die Tafel steht unten, die oberste Reihe ist die hinterste. Wird das Raster kleiner, verlieren Tische außerhalb ihren Platz — die Namen wandern zurück in „Ohne Platz".</div>
+  `, [
+    { label: 'Abbrechen', onClick: closeModal },
+    { label: 'Speichern', cls: 'primary', onClick: () => {
+      st.cols = clamp(parseInt(val('sgCols')) || st.cols, 1, 12);
+      st.rows = clamp(parseInt(val('sgRows')) || st.rows, 1, 12);
+      const lost = seatsOutside(st);
+      lost.forEach(k => delete st.seats[k]);
+      save(); closeModal(); renderSeating();
+      if (lost.length) toast(`${lost.length} Platz/Plätze außerhalb entfernt.`);
+    }},
+  ]);
+}
+
+/* füllt freie Plätze reihenweise mit den noch nicht platzierten Schüler:innen */
+function seatingAutoFill(c) {
+  const st = ensureSeating(c);
+  const free = [];
+  for (let y = 0; y < st.rows; y++) for (let x = 0; x < st.cols; x++) if (!st.seats[seatKey(x, y)]) free.push(seatKey(x, y));
+  const pool = unseatedStudents(c);
+  const n = Math.min(free.length, pool.length);
+  for (let i = 0; i < n; i++) st.seats[free[i]] = pool[i].id;
+  save(); renderSeating();
+  if (!n) toast(pool.length ? 'Kein freier Platz — Raster vergrößern.' : 'Alle sitzen schon.');
+  else toast(`${n} platziert${pool.length > n ? `, ${pool.length - n} ohne Platz (Raster zu klein)` : ''}.`);
+}
+
 /* Klasse durchtippen (mündliche Mitarbeit, heute) */
 function startDurchtippen(c) {
   const hy = c.halfYears[route.hy];
@@ -2280,7 +2639,8 @@ function openDurchtippen(c, colId, idx) {
     pad += `<button data-p="${p}" class="${cur===p?'sel':''}" style="background:${bg};color:${fg}">${big}<span class="nt" style="color:${fg}">${sub}</span></button>`;
   }
   modal(`${esc(col.label)} — ${esc(s.firstName)} ${esc(s.lastName||'')}  (${idx+1}/${students.length})`,
-    `<div class="dt-info">
+    `${s.info ? `<div class="notice info-note"><span class="info-i">i</span> ${esc(s.info)}</div>` : ''}
+     <div class="dt-info">
        <div><span class="dt-lbl">${avgLbl}</span><b>${fmtGrade(info.avg, scale, true)}</b></div>
        <div><span class="dt-lbl">Tendenz</span><b>${trendTxt}</b></div>
        <div><span class="dt-lbl">Letzte Note</span><b>${info.lastDate ? fmtDateLong(info.lastDate) : '—'}</b></div>
@@ -2404,6 +2764,7 @@ function closeModal() { document.getElementById('modalBackdrop').hidden = true; 
 document.getElementById('modalClose').onclick = closeModal;
 document.getElementById('modalBackdrop').addEventListener('click', e => { if (e.target.id === 'modalBackdrop') closeModal(); });
 document.getElementById('navHome').onclick = () => go({ name: 'home' });
+document.getElementById('backFab').onclick = goBack;
 
 /* ---------- Kurs anlegen / bearbeiten ---------- */
 function openCourseForm(course) {
@@ -2595,7 +2956,7 @@ const scopeLabel = s => ({ allgemein: 'Allgemein', schriftlich: 'Schriftlich', m
 function openStudents(c) {
   const list = c.students.map(s => `
     <div class="chip">
-      <div class="chip-main"><b>${esc(s.firstName)} ${esc(s.lastName||'')}</b>
+      <div class="chip-main"><b>${esc(s.firstName)} ${esc(s.lastName||'')}${infoBadge(s)}</b>
         <span>${s.entry?'Eintritt '+fmtDateLong(s.entry):''}${s.exit?' · Austritt '+fmtDateLong(s.exit):''}${!s.entry&&!s.exit?'aktiv':''}</span></div>
       <div style="display:flex;gap:6px">
         <button class="btn small" data-edit="${s.id}">Ändern</button>
@@ -2611,6 +2972,11 @@ function openStudents(c) {
   `, [{ label: 'Fertig', cls: 'primary', onClick: () => { closeModal(); render(); } }]);
   document.getElementById('stAdd').onclick = () => openStudentForm(c);
   document.getElementById('stImport').onclick = () => openImport(c);
+  document.querySelectorAll('.info-i[data-info]').forEach(el => el.onclick = ev => {
+    ev.stopPropagation();
+    const s = c.students.find(x => x.id === el.dataset.info);
+    if (s) openInfoEdit(c, s, () => openStudents(c));
+  });
   document.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => openStudentForm(c, b.dataset.edit));
   document.querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
     c.students = c.students.filter(x => x.id !== b.dataset.del);
@@ -2618,12 +2984,15 @@ function openStudents(c) {
     delete data.manual[b.dataset.del]; delete data.weightOverride[b.dataset.del];
     delete data.kaPoints[b.dataset.del];
     data.notes = data.notes.filter(n => n.studentId !== b.dataset.del);
+    if (c.seating && c.seating.seats) {
+      Object.keys(c.seating.seats).forEach(k => { if (c.seating.seats[k] === b.dataset.del) delete c.seating.seats[k]; });
+    }
     save(); openStudents(c);
   });
 }
 function openStudentForm(c, id) {
   const editing = !!id;
-  const s = editing ? c.students.find(x => x.id === id) : { firstName: '', lastName: '', entry: '', exit: '' };
+  const s = editing ? c.students.find(x => x.id === id) : { firstName: '', lastName: '', entry: '', exit: '', info: '' };
   modal(editing ? 'Schüler:in bearbeiten' : 'Schüler:in hinzufügen', `
     <div class="row2">
       <div class="field"><label>Vorname *</label><input id="stF" type="text" value="${esc(s.firstName)}"></div>
@@ -2633,6 +3002,10 @@ function openStudentForm(c, id) {
       <div class="field"><label>Eintritt</label><input id="stE" type="date" value="${s.entry||''}"></div>
       <div class="field"><label>Austritt</label><input id="stX" type="date" value="${s.exit||''}"></div>
     </div>
+    <div class="field"><label>Kurzinfo (Nachteilsausgleich, Hinweis)</label>
+      <textarea id="stI" placeholder="z. B. Nachteilsausgleich: 25 % Zeitzuschlag" style="min-height:64px">${esc(s.info||'')}</textarea>
+      <div class="hint">Erscheint als „i" neben dem Namen — in der Notentabelle, bei Klassenarbeiten und im Sitzplan.</div>
+    </div>
     <div class="hint">Nur der Vorname ist Pflicht.</div>
   `, [
     { label: 'Abbrechen', onClick: () => openStudents(c) },
@@ -2640,6 +3013,7 @@ function openStudentForm(c, id) {
       const f = val('stF').trim();
       if (!f) return toast('Vorname ist erforderlich.');
       s.firstName = f; s.lastName = val('stL').trim(); s.entry = val('stE'); s.exit = val('stX');
+      s.info = val('stI').trim();
       if (!editing) { s.id = uid(); c.students.push(s); }
       save(); openStudents(c);
     }},
@@ -2653,7 +3027,7 @@ function addStudents(c, entries) {
   entries.forEach(e => {
     if (!e.firstName) return;
     if (has(e.firstName, e.lastName)) { skipped++; return; }
-    c.students.push({ id: uid(), firstName: e.firstName, lastName: e.lastName || '', entry: e.entry || '', exit: e.exit || '' });
+    c.students.push({ id: uid(), firstName: e.firstName, lastName: e.lastName || '', entry: e.entry || '', exit: e.exit || '', info: '' });
     added++;
   });
   save();
