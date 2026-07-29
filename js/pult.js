@@ -429,10 +429,6 @@ function gradeInk(pts) {
 
 /* ---------- Notenberechnung ---------- */
 function studentActive(s) { return !s.exit; }
-function mean(arr) {
-  const vals = arr.filter(v => typeof v === 'number' && !isNaN(v));
-  return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
-}
 /* Sonstige Leistung als Bonus: mischt sich anteilig ein, aber NUR wenn sie den Schnitt hebt. */
 function applyBonus(base, sonstigeList, sId) {
   if (base == null) return null;
@@ -451,19 +447,94 @@ function getWeight(course, sId, hyKey) {
   if (ov != null && !isNaN(ov)) return { w: ov, m: 100 - ov, custom: true };
   return { w: course.weightWritten, m: course.weightOral, custom: false };
 }
+
+/* ---------- Gewichtung einzelner Noten ----------
+   Standard: jede Note zählt einfach (Faktor 1). Eine Spalte kann stattdessen
+   n-fach zählen (col.factor) oder einen festen Anteil an der Gesamtnote
+   bekommen (col.pct). Feste Anteile werden ihrem Bereich vorweg abgezogen:
+   bei 60 % mündlich und einer mündlichen 10-%-Note teilen sich die übrigen
+   mündlichen Noten nur noch 50 %. Unbenotete Spalten zählen nicht mit — ihr
+   Anteil verteilt sich auf die übrigen Noten desselben Bereichs. */
+const colFactor = col => { const f = Number(col && col.factor); return isFinite(f) && f > 0 ? f : 1; };
+const colPct    = col => { const p = Number(col && col.pct);    return isFinite(p) && p > 0 ? Math.min(p, 100) : null; };
+const colWeighted = col => colPct(col) != null || colFactor(col) !== 1;
+/* Kurzform der Gewichtung: „10 %" (fest), „×2" (n-fach), '' (Standard) */
+function weightLabel(col) {
+  const p = colPct(col);
+  if (p != null) return `${fmtNum(p)} %`;
+  const f = colFactor(col);
+  return f === 1 ? '' : `×${fmtNum(f)}`;
+}
+function weightTitle(col) {
+  const p = colPct(col);
+  if (p != null) return `zählt fest mit ${fmtNum(p)} % der Gesamtnote`;
+  const f = colFactor(col);
+  return f === 1 ? '' : `zählt ${fmtNum(f)}-fach`;
+}
+/* Gewichtungs-Plakette für Spaltenköpfe und Listen */
+function weightPill(col, style) {
+  const lbl = weightLabel(col);
+  return lbl ? ` <span class="pill" style="font-size:9px;padding:1px 5px;vertical-align:middle;${style||''}" title="${esc(weightTitle(col))}">${lbl}</span>` : '';
+}
+
+/* benotete Leistungen eines Bereichs als [{ col, v }] */
+function blockEntries(cols, sId) {
+  const gr = data.grades[sId] || {};
+  return cols.map(col => ({ col, v: gr[col.id] })).filter(e => e.v != null && !isNaN(e.v));
+}
+/* Gewichteter Schnitt eines Bereichs.
+   blockPct = Anteil des Bereichs an der Gesamtnote (z. B. 60 % mündlich).
+   Liefert zusätzlich je Note ihren Anteil — `share` am Bereich (0..1) und
+   `pct` an der Gesamtnote — für die Übersicht im Rechenweg. */
+function weighEntries(entries, blockPct) {
+  if (!entries.length) return { avg: null, parts: [] };
+  const B = blockPct > 0 ? blockPct : 100;
+  const fixed = entries.filter(e => colPct(e.col) != null);
+  const rest  = entries.filter(e => colPct(e.col) == null);
+  const fixedSum = fixed.reduce((a, e) => a + colPct(e.col), 0);
+  const shares = new Map();
+  if (!rest.length) {
+    /* nur feste Anteile: sie teilen den Bereich unter sich auf */
+    fixed.forEach(e => shares.set(e, colPct(e.col) / fixedSum));
+  } else {
+    /* mehr als 100 % fest vergeben → proportional kürzen */
+    const cut = fixedSum > B ? B / fixedSum : 1;
+    fixed.forEach(e => shares.set(e, colPct(e.col) * cut / B));
+    const left = (B - fixedSum * cut) / B;
+    const fTot = rest.reduce((a, e) => a + colFactor(e.col), 0);
+    rest.forEach(e => shares.set(e, left * colFactor(e.col) / fTot));
+  }
+  let avg = 0;
+  const parts = entries.map(e => {
+    const share = shares.get(e) || 0;
+    avg += share * e.v;
+    return { col: e.col, v: e.v, share, pct: share * B, fixed: colPct(e.col) != null };
+  });
+  return { avg, parts };
+}
+
 /* Reine Rechnung eines Halbjahres (ohne manuelle Überschreibung) */
 function computeHalf(course, hyKey, sId) {
   const hy = course.halfYears[hyKey];
-  const gr = data.grades[sId] || {};
   const schriftCols = hy.columns.filter(c => c.type === 'schriftlich');
   const muendCols   = hy.columns.filter(c => c.type === 'muendlich');
+  const sEnt = blockEntries(schriftCols, sId);
+  const mEnt = blockEntries(muendCols, sId);
 
-  const wRaw = mean(schriftCols.map(c => gr[c.id]));
-  const mRaw = mean(muendCols.map(c => gr[c.id]));
+  const wt = getWeight(course, sId, hyKey);
+  /* Fehlt ein Bereich ganz, trägt der andere die volle Note — dann sind auch
+     die ausgewiesenen Prozente die an der Gesamtnote. */
+  const both = sEnt.length && mEnt.length;
+  const wPct = both ? wt.w : 100;
+  const mPct = both ? wt.m : 100;
+  const wPart = weighEntries(sEnt, wPct);
+  const mPart = weighEntries(mEnt, mPct);
+
+  const wRaw = wPart.avg;
+  const mRaw = mPart.avg;
   const wAvg = applyBonus(wRaw, hy.sonstige.filter(s => s.scope === 'schriftlich'), sId);
   const mAvg = applyBonus(mRaw, hy.sonstige.filter(s => s.scope === 'muendlich'),  sId);
 
-  const wt = getWeight(course, sId, hyKey);
   let gesamt;
   if (wAvg == null && mAvg == null) gesamt = null;
   else if (wAvg == null) gesamt = mAvg;
@@ -471,7 +542,7 @@ function computeHalf(course, hyKey, sId) {
   else gesamt = wAvg * (wt.w / 100) + mAvg * (wt.m / 100);
   gesamt = applyBonus(gesamt, hy.sonstige.filter(s => s.scope === 'allgemein'), sId);
 
-  return { wRaw, mRaw, wAvg, mAvg, gesamt, wt };
+  return { wRaw, mRaw, wAvg, mAvg, gesamt, wt, wPct, mPct, wParts: wPart.parts, mParts: mPart.parts };
 }
 /* effektive Gesamtnote eines Halbjahres (manuell vor berechnet) */
 function effGesamt(course, hyKey, sId) {
@@ -589,14 +660,17 @@ function verlaufSvg(series, scale) {
 /* Simulation: Gesamtnote eines Halbjahres mit einer hypothetisch ergänzten Note */
 function simulateGesamt(course, hyKey, sId, extra) {
   const hy = course.halfYears[hyKey];
-  const gr = data.grades[sId] || {};
-  let schrift = hy.columns.filter(c => c.type === 'schriftlich').map(c => gr[c.id]).filter(v => v != null && !isNaN(v));
-  let muend = hy.columns.filter(c => c.type === 'muendlich').map(c => gr[c.id]).filter(v => v != null && !isNaN(v));
-  if (extra) { if (extra.type === 'schriftlich') schrift = schrift.concat(extra.value); else muend = muend.concat(extra.value); }
-  const avg = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
-  const wAvg = applyBonus(avg(schrift), hy.sonstige.filter(s => s.scope === 'schriftlich'), sId);
-  const mAvg = applyBonus(avg(muend), hy.sonstige.filter(s => s.scope === 'muendlich'), sId);
+  let schrift = blockEntries(hy.columns.filter(c => c.type === 'schriftlich'), sId);
+  let muend = blockEntries(hy.columns.filter(c => c.type === 'muendlich'), sId);
+  /* die hypothetische Note zählt einfach (Faktor 1) */
+  if (extra) {
+    const e = { col: { id: '__sim' }, v: extra.value };
+    if (extra.type === 'schriftlich') schrift = schrift.concat(e); else muend = muend.concat(e);
+  }
   const wt = getWeight(course, sId, hyKey);
+  const both = schrift.length && muend.length;
+  const wAvg = applyBonus(weighEntries(schrift, both ? wt.w : 100).avg, hy.sonstige.filter(s => s.scope === 'schriftlich'), sId);
+  const mAvg = applyBonus(weighEntries(muend, both ? wt.m : 100).avg, hy.sonstige.filter(s => s.scope === 'muendlich'), sId);
   let g;
   if (wAvg == null && mAvg == null) g = null;
   else if (wAvg == null) g = mAvg;
@@ -1610,10 +1684,13 @@ function renderStudent() {
     return `<span class="sd-chip" style="background:${bg};color:${fg}">${fmtGrade(pts, scale, avg)}</span>`;
   };
 
-  const leistungRow = (col, hyKey) => {
+  const leistungRow = (col, hyKey, parts) => {
     const v = (data.grades[s.id] || {})[col.id];
+    const p = (parts || []).find(x => x.col.id === col.id);
+    const share = p ? ` <span class="cs-sub">· ${fmtNum(p.pct)} %${p.fixed ? ' fest' : ''}</span>`
+      : (colWeighted(col) ? ` <span class="cs-sub">· ${weightLabel(col)}</span>` : '');
     return `<div class="cs-line sd-grade" data-col="${col.id}" data-hy="${hyKey}">
-      <span>${esc(col.label)}${col.ka?' <span class="pill" style="font-size:9px;padding:0 5px">KA</span>':''}${col.date?` <span class="cs-sub">${fmtDate(col.date)}</span>`:''}</span>
+      <span>${esc(col.label)}${col.ka?' <span class="pill" style="font-size:9px;padding:0 5px">KA</span>':''}${col.date?` <span class="cs-sub">${fmtDate(col.date)}</span>`:''}${share}</span>
       <span class="cs-vals">${valChip(v, false)}</span></div>`;
   };
   const sonstRow = (so) => {
@@ -1631,11 +1708,11 @@ function renderStudent() {
     return `<div class="calc-block">
       <h3>${hyKey}. Halbjahr</h3>
       <div class="cs-sub" style="margin-bottom:4px">Schriftlich</div>
-      ${schrift.length ? schrift.map(col => leistungRow(col, hyKey)).join('') : '<div class="cs-line cs-sub"><span>keine</span><span></span></div>'}
+      ${schrift.length ? schrift.map(col => leistungRow(col, hyKey, comp.wParts)).join('') : '<div class="cs-line cs-sub"><span>keine</span><span></span></div>'}
       ${hy.sonstige.filter(x=>x.scope==='schriftlich').map(sonstRow).join('')}
       <div class="cs-line"><span><b>Ø schriftlich</b></span><span class="cs-vals">${fmtGrade(comp.wAvg, scale, true)}</span></div>
       <div class="cs-sub" style="margin:8px 0 4px">Mündlich</div>
-      ${muend.length ? muend.map(col => leistungRow(col, hyKey)).join('') : '<div class="cs-line cs-sub"><span>keine</span><span></span></div>'}
+      ${muend.length ? muend.map(col => leistungRow(col, hyKey, comp.mParts)).join('') : '<div class="cs-line cs-sub"><span>keine</span><span></span></div>'}
       ${hy.sonstige.filter(x=>x.scope==='muendlich').map(sonstRow).join('')}
       <div class="cs-line"><span><b>Ø mündlich</b></span><span class="cs-vals">${fmtGrade(comp.mAvg, scale, true)}</span></div>
       ${hy.sonstige.filter(x=>x.scope==='allgemein').map(sonstRow).join('')}
@@ -2042,7 +2119,7 @@ function renderTable(c) {
 
   const headCols = (cols, grpClass) => cols.map(col => `
     <th class="colhead ${grpClass}" data-col="${col.id}">
-      <span class="ch-label">${esc(col.label)}${col.ka ? ' <span class="pill" style="font-size:9px;padding:1px 5px;vertical-align:middle">KA</span>' : ''}</span>
+      <span class="ch-label">${esc(col.label)}${col.ka ? ' <span class="pill" style="font-size:9px;padding:1px 5px;vertical-align:middle">KA</span>' : ''}${weightPill(col)}</span>
       ${col.date ? `<span class="ch-date">${fmtDate(col.date)}</span>` : ''}
     </th>`).join('');
   const headSonst = list => list.map(so => `<th class="grp-sonst">${esc(so.label)}<span class="ch-date">${so.percent}%</span></th>`).join('');
@@ -2277,8 +2354,16 @@ function openCalcGesamt(c, s, name) {
   const eff = effGesamt(c, hyKey, s.id);
   const scale = c.scale;
 
-  const listCols = (cols) => cols.length
-    ? cols.map(col => `<div class="cs-line"><span>${esc(col.label)}</span><span class="cs-vals">${fmtGrade(gr[col.id], scale, false)}</span></div>`).join('')
+  /* je Note ihr tatsächlicher Anteil an der Gesamtnote — unbenotete Spalten
+     zählen nicht mit und stehen deshalb ohne Prozentwert da. */
+  const listCols = (cols, parts) => cols.length
+    ? cols.map(col => {
+        const p = parts.find(x => x.col.id === col.id);
+        const share = p
+          ? `<span class="cs-sub"> · ${fmtNum(p.pct)} %${p.fixed ? ' fest' : ''}</span>`
+          : (colWeighted(col) ? `<span class="cs-sub"> · ${weightLabel(col)}</span>` : '');
+        return `<div class="cs-line"><span>${esc(col.label)}${share}</span><span class="cs-vals">${fmtGrade(gr[col.id], scale, false)}</span></div>`;
+      }).join('')
     : `<div class="cs-line cs-sub"><span>keine Noten</span><span></span></div>`;
   const listSonst = (scope, base) => hy.sonstige.filter(x => x.scope === scope).map(so => {
     const sv = (data.sonstigeValues[s.id]||{})[so.id];
@@ -2289,13 +2374,13 @@ function openCalcGesamt(c, s, name) {
     <div class="calc-sheet">
       <div class="calc-block">
         <h3>Schriftlich</h3>
-        ${listCols(hy.columns.filter(x=>x.type==='schriftlich'))}
+        ${listCols(hy.columns.filter(x=>x.type==='schriftlich'), comp.wParts)}
         ${listSonst('schriftlich', comp.wRaw)}
         <div class="cs-line"><span>Ø schriftlich</span><span class="cs-vals">${fmtGrade(comp.wAvg, scale, true)}</span></div>
       </div>
       <div class="calc-block">
         <h3>Mündlich</h3>
-        ${listCols(hy.columns.filter(x=>x.type==='muendlich'))}
+        ${listCols(hy.columns.filter(x=>x.type==='muendlich'), comp.mParts)}
         ${listSonst('muendlich', comp.mRaw)}
         <div class="cs-line"><span>Ø mündlich</span><span class="cs-vals">${fmtGrade(comp.mAvg, scale, true)}</span></div>
       </div>
@@ -2854,7 +2939,7 @@ function openColumnMenu(c, colId) {
   if (!col) return;
   const typLbl = col.type === 'schriftlich' ? 'schriftlich' : 'mündlich';
   modal(esc(col.label), `
-    <div class="cs-sub" style="margin-bottom:10px">${typLbl}${col.date ? ' · ' + fmtDateLong(col.date) : ''}</div>
+    <div class="cs-sub" style="margin-bottom:10px">${typLbl}${col.date ? ' · ' + fmtDateLong(col.date) : ''}${colWeighted(col) ? ' · ' + esc(weightTitle(col)) : ''}</div>
     <div class="chip-list">
       <button class="btn primary" style="width:100%" id="cmDurch">Durchtippen — ganze Klasse</button>
       <button class="btn" style="width:100%" id="cmEdit">Spalte bearbeiten</button>
@@ -2866,9 +2951,10 @@ function openColumnMenu(c, colId) {
 function muendlichInfo(c, hyKey, sId, excludeColId, type) {
   type = type || 'muendlich';
   const cols = c.halfYears[hyKey].columns.filter(x => x.type === type && x.id !== excludeColId);
-  const withGrade = cols.map(x => ({ date: x.date, v: (data.grades[sId] || {})[x.id] })).filter(o => o.v != null && !isNaN(o.v));
+  const entries = blockEntries(cols, sId);
+  const withGrade = entries.map(e => ({ date: e.col.date, v: e.v }));
   const vals = withGrade.map(o => o.v);
-  const avg = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+  const avg = weighEntries(entries, 100).avg;   // gewichtet wie im Zeugnis
   let trend = null;
   if (vals.length >= 3) {
     const half = Math.floor(vals.length / 2);
@@ -3102,14 +3188,32 @@ function openColumnForm(c, type, colId) {
   const editing = !!colId;
   const col = editing ? hy.columns.find(x => x.id === colId) : { type, label: '', date: '' };
   const t = col.type;
+  const fixedPct = colPct(col);
+  const wMode = fixedPct != null ? 'pct' : 'factor';
+  /* Bereichsgewicht als Bezugsgröße für den festen Anteil (Kurs-Standard) */
+  const blockPct = () => (chosen === 'schriftlich' ? c.weightWritten : c.weightOral);
   modal(editing ? 'Note bearbeiten' : (t === 'schriftlich' ? 'Neue schriftliche Note' : 'Neue mündliche Note'), `
     <div class="field"><label>Bezeichnung</label>
       <input id="cLabel" type="text" value="${esc(col.label)}" placeholder="${t==='schriftlich'?'z. B. 1. Klausur':'z. B. Mitarbeit'}"></div>
     <div class="field"><label>Datum (optional)</label><input id="cDate" type="date" value="${col.date||''}"></div>
     <div class="field"><label>Art</label>
-      <div class="seg" style="width:100%">
+      <div class="seg" id="cType" style="width:100%">
         <button type="button" data-t="schriftlich" style="flex:1" class="${t==='schriftlich'?'active':''}">Schriftlich</button>
         <button type="button" data-t="muendlich" style="flex:1" class="${t==='muendlich'?'active':''}">Mündlich</button>
+      </div>
+    </div>
+    <div class="field"><label>Gewichtung</label>
+      <div class="seg" id="cWMode" style="width:100%">
+        <button type="button" data-w="factor" style="flex:1" class="${wMode==='factor'?'active':''}">Zählt n-fach</button>
+        <button type="button" data-w="pct" style="flex:1" class="${wMode==='pct'?'active':''}">Fester Anteil</button>
+      </div>
+      <div id="cWFactor" style="margin-top:8px;${wMode==='factor'?'':'display:none'}">
+        <input id="cFactor" type="number" min="0.1" max="20" step="0.5" value="${fmtNum(colFactor(col)).replace(',', '.')}">
+        <div class="hint">Standard 1. Bei 2 wiegt diese Note so viel wie zwei einfache Noten desselben Bereichs.</div>
+      </div>
+      <div id="cWPct" style="margin-top:8px;${wMode==='pct'?'':'display:none'}">
+        <input id="cPct" type="number" min="1" max="100" value="${fixedPct != null ? fmtNum(fixedPct).replace(',', '.') : ''}" placeholder="z. B. 10">
+        <div class="hint" id="cPctHint"></div>
       </div>
     </div>
   `, [
@@ -3127,15 +3231,44 @@ function openColumnForm(c, type, colId) {
       const label = val('cLabel').trim();
       if (!label) return toast('Bitte eine Bezeichnung angeben.');
       col.label = label; col.date = val('cDate');
+      /* Gewichtung: nur speichern, was vom Standard abweicht */
+      delete col.factor; delete col.pct;
+      if (wPick === 'pct') {
+        const p = clamp(parseFloat(val('cPct').replace(',', '.')) || 0, 0, 100);
+        if (p > 0) col.pct = p;
+      } else {
+        const f = clamp(parseFloat(val('cFactor').replace(',', '.')) || 1, 0.1, 20);
+        if (f !== 1) col.factor = f;
+      }
       if (!editing) { col.id = uid(); hy.columns.push(col); }
       save(); closeModal(); renderCourse();
     }},
   ]);
   let chosen = col.type;
-  document.querySelectorAll('.modal-body .seg button').forEach(b => b.onclick = () => {
+  let wPick = wMode;
+  const pctHint = () => {
+    const el = document.getElementById('cPctHint'); if (!el) return;
+    const b = blockPct(), lbl = chosen === 'schriftlich' ? 'schriftlich' : 'mündlich';
+    const p = clamp(parseFloat(val('cPct').replace(',', '.')) || 0, 0, 100);
+    const restText = p > 0 && p < b
+      ? ` Die übrigen ${lbl}en Noten teilen sich dann noch ${fmtNum(b - p)} %.`
+      : (p >= b ? ` Das ist bereits der ganze ${lbl}e Anteil — die übrigen ${lbl}en Noten zählen dann nicht mehr.` : '');
+    el.textContent = `Anteil an der Gesamtnote. ${lbl.charAt(0).toUpperCase() + lbl.slice(1)} zählt insgesamt ${fmtNum(b)} %.${restText}`;
+  };
+  document.querySelectorAll('#cType button').forEach(b => b.onclick = () => {
     chosen = b.dataset.t; col.type = chosen;
-    document.querySelectorAll('.modal-body .seg button').forEach(x => x.classList.toggle('active', x.dataset.t === chosen));
+    document.querySelectorAll('#cType button').forEach(x => x.classList.toggle('active', x.dataset.t === chosen));
+    pctHint();
   });
+  document.querySelectorAll('#cWMode button').forEach(b => b.onclick = () => {
+    wPick = b.dataset.w;
+    document.querySelectorAll('#cWMode button').forEach(x => x.classList.toggle('active', x.dataset.w === wPick));
+    document.getElementById('cWFactor').style.display = wPick === 'factor' ? '' : 'none';
+    document.getElementById('cWPct').style.display = wPick === 'pct' ? '' : 'none';
+    pctHint();
+  });
+  document.getElementById('cPct').oninput = pctHint;
+  pctHint();
 }
 
 /* ---------- Sonstige Leistungen ---------- */
