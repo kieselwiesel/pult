@@ -480,6 +480,7 @@ th.tt-period .tt-pt { display: block; font-size: 10px; color: var(--ink-faint); 
 td.tt-cell { height: 58px; vertical-align: stretch; padding: 3px; }
 td.tt-cell.tt-today { background: #f2f8f6; }
 .tt-lesson {
+  position: relative;
   appearance: none; width: 100%; height: 100%; min-height: 52px; cursor: pointer;
   border: 1px solid var(--line-soft); border-left: 4px solid var(--accent);
   border-radius: var(--radius); padding: 6px 8px; text-align: left;
@@ -491,6 +492,19 @@ td.tt-cell.tt-today { background: #f2f8f6; }
 .tt-lesson .tt-subject { font-weight: 700; font-size: 14px; line-height: 1.15; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tt-lesson .tt-meta { font-size: 12px; opacity: .85; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tt-missing { font-style: italic; opacity: .7; }
+/* Marke für Stunden, die nur in Woche A oder nur in Woche B stattfinden */
+.tt-lesson .tt-ab {
+  position: absolute; top: 3px; right: 4px;
+  font-size: 10px; font-weight: 800; line-height: 1; letter-spacing: .04em;
+  padding: 2px 4px; border-radius: 4px; opacity: .75;
+  background: rgba(255,255,255,.65); color: inherit;
+}
+/* „jetzt" im A/B-Umschalter — markiert die laufende Woche */
+.tab .tt-now {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+  padding: 1px 5px; margin-left: 6px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent-ink);
+}
 td.tt-cell.tt-editable { background: repeating-linear-gradient(45deg, #fafbfc, #fafbfc 6px, #f2f4f6 6px, #f2f4f6 12px); }
 td.tt-cell.tt-editable.tt-today { background: #eef6f2; }
 .tt-add {
@@ -545,7 +559,7 @@ td.tt-cell.tt-editable.tt-today { background: #eef6f2; }
 .info-text { white-space: pre-wrap; font-size: 15px; }
 
 /* ---------- Sitzplan ---------- */
-.seat-board { border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); box-shadow: var(--shadow); padding: 12px; overflow-x: auto; }
+.seat-board { border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); box-shadow: var(--shadow); padding: 12px; }
 /* Tafel steht unten — der Plan wird aus Sicht der Lehrkraft gelesen */
 .seat-front {
   border: 1px solid var(--line); border-top: 3px solid var(--accent);
@@ -553,11 +567,20 @@ td.tt-cell.tt-editable.tt-today { background: #eef6f2; }
   font-size: 12px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase;
   text-align: center; padding: 7px 0; margin-top: 12px; border-radius: var(--radius);
 }
-/* Tische bleiben schmal, auch wenn das Raster nur wenige Spalten hat */
-.seat-grid { display: grid; gap: 8px; min-width: max-content; justify-content: center; }
+/* Tische bleiben schmal, auch wenn das Raster nur wenige Spalten hat: die Spalten
+   teilen sich die Breite (1fr), das Raster selbst ist auf cols × 116px gedeckelt.
+   Wird das Raster breiter als der Platz, schrumpfen die Kacheln — statt zu scrollen. */
+.seat-grid {
+  display: grid; gap: 8px; width: 100%; margin-inline: auto;
+  --seat-fs: 14px; --seat-fs2: 12px; --seat-fs3: 12px;
+  --seat-pad: 7px 9px; --seat-minh: 62px;
+}
+/* ab 9 bzw. 11 Spalten wird es eng — Schrift und Polster ziehen mit */
+.seat-grid.dense { --seat-fs: 13px; --seat-fs2: 11px; --seat-fs3: 11px; --seat-pad: 6px 7px; --seat-minh: 56px; gap: 6px; }
+.seat-grid.tight { --seat-fs: 12px; --seat-fs2: 10px; --seat-fs3: 10px; --seat-pad: 5px 6px; --seat-minh: 50px; gap: 5px; }
 .seat {
   appearance: none; font: inherit; cursor: pointer; text-align: left;
-  min-height: 62px; padding: 7px 9px; border-radius: var(--radius);
+  min-height: var(--seat-minh); padding: var(--seat-pad); border-radius: var(--radius);
   border: 1px solid var(--line); border-left: 4px solid var(--accent);
   background: var(--card); color: var(--ink);
   display: flex; flex-direction: column; justify-content: center; gap: 1px; overflow: hidden;
@@ -565,11 +588,14 @@ td.tt-cell.tt-editable.tt-today { background: #eef6f2; }
 }
 .seat:hover { box-shadow: 0 2px 8px rgba(28,33,40,.12); border-color: var(--ink-faint); }
 .seat:active { transform: translateY(1px); }
-.seat .seat-name { font-weight: 700; font-size: 14px; line-height: 1.15; display: flex; align-items: center; min-width: 0; }
-.seat .seat-last { font-size: 12px; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.seat .seat-name { font-weight: 700; font-size: var(--seat-fs); line-height: 1.15; display: flex; align-items: center; gap: 2px; min-width: 0; }
+/* der Vorname weicht als Erstes — „i" und Blind-Punkt bleiben stehen */
+.seat .seat-first { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.seat .seat-name > :not(.seat-first) { flex: none; }
+.seat .seat-last { font-size: var(--seat-fs2); color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .seat .seat-val {
   align-self: flex-start; margin-top: 4px; padding: 1px 7px; border-radius: var(--radius);
-  border: 1px solid var(--line-soft); font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums;
+  border: 1px solid var(--line-soft); font-size: var(--seat-fs3); font-weight: 700; font-variant-numeric: tabular-nums;
 }
 .seat.good { border-left-color: var(--g-top); background: var(--g-good); }
 .seat.bad { border-left-color: var(--g-fail); background: var(--g-low); }

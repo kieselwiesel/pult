@@ -30,7 +30,9 @@ const DEFAULT_DATA = () => ({
   lists: [],           // { id, courseId, title, dueDate, status:{studentId:'offen'|'abgegeben'|'befreit'} }
   timetable: {         // Stundenplan (Mo–Fr)
     periods: DEFAULT_PERIODS(),   // [{ label, start, end }]
-    lessons: [],       // { id, day:1..5, period:0-basiert, courseId, room }
+    lessons: [],       // { id, day:1..5, period:0-basiert, courseId, room, week:0|1|2 }
+    abWeeks: false,    // Zwei-Wochen-Rhythmus (Woche A / Woche B)
+    anchorMonday: '',  // ISO-Montag einer Woche A — Bezugspunkt für den Wechsel
   },
   todos: [],           // { id, text, done, created, due, courseId|null }
   termine: [],         // { id, title, date, start, end, allDay, location, note, courseId|null, uid }
@@ -614,7 +616,33 @@ function courseColor(courseId) {
   const i = data.courses.findIndex(c => c.id === courseId);
   return COURSE_COLORS[(i < 0 ? 0 : i) % COURSE_COLORS.length];
 }
-function lessonAt(day, period) { return (data.timetable.lessons || []).find(l => l.day === day && l.period === period); }
+/* ---------- Zwei-Wochen-Rhythmus (Woche A / Woche B) ----------
+   lesson.week: 0 = jede Woche, 1 = nur A, 2 = nur B. Ältere Stunden ohne Feld
+   gelten als 0 und laufen damit unverändert in beiden Wochen. */
+const AB_LABEL = ['', 'A', 'B'];
+const MS_WEEK = 7 * 24 * 60 * 60 * 1000;
+function abActive() { return !!(data.timetable && data.timetable.abWeeks); }
+/* Montag, der als Woche A zählt — ohne Anker ist es der Montag dieser Woche */
+function abAnchor() { return mondayOf(data.timetable.anchorMonday || undefined); }
+/* Woche (1 = A, 2 = B), in der das Datum liegt; Default heute */
+function abWeekOf(iso) {
+  const weeks = Math.round((mondayOf(iso) - abAnchor()) / MS_WEEK);   // DST-fest durch Runden
+  return ((weeks % 2) + 2) % 2 === 0 ? 1 : 2;
+}
+/* legt den Anker so, dass die laufende Woche die gewünschte ist */
+function abSetCurrentWeek(week) {
+  const m = mondayOf();
+  if (week === 2) m.setDate(m.getDate() - 7);
+  data.timetable.anchorMonday = dateToISO(m);
+}
+/* Stunde in einem Feld. Im A/B-Plan gewinnt der Eintrag der gezeigten Woche
+   vor einem Eintrag „jede Woche". */
+function lessonAt(day, period, week) {
+  const all = (data.timetable.lessons || []).filter(l => l.day === day && l.period === period);
+  const every = all.find(l => !(l.week || 0));
+  if (!abActive()) return every || all[0];
+  return all.find(l => (l.week || 0) === week) || every;
+}
 
 /* ---------- Termine: Sortierung & Filter ---------- */
 function termineSorted() {
@@ -890,6 +918,7 @@ function renderCourses() {
    Startseite — Stundenplan + „Heute"
    ============================================================ */
 let planEdit = false;   // Stundenplan-Bearbeitungsmodus
+let planWeek = null;    // im A/B-Plan angezeigte Woche (1|2); null = die laufende
 
 /* kurzer, unaufdringlicher Text zum letzten Backup */
 function backupAgeText() {
@@ -902,8 +931,13 @@ function backupAgeText() {
 }
 
 function renderHome() {
+  const ab = abActive();
+  const curWeek = ab ? abWeekOf() : 0;
+  const week = ab ? (planWeek === 1 || planWeek === 2 ? planWeek : curWeek) : 0;
+  /* die gezeigte Woche ist entweder die laufende oder die darauffolgende */
   const monday = mondayOf();
-  const wdToday = todayWeekday();
+  if (ab && week !== curWeek) monday.setDate(monday.getDate() + 7);
+  const wdToday = ab && week !== curWeek ? 0 : todayWeekday();
   const periods = data.timetable.periods || [];
   const ferien = weeksUntil(data.meta.ferienDatum);
   const zeugnis = weeksUntil(data.meta.zeugnisDatum);
@@ -928,15 +962,17 @@ function renderHome() {
   const bodyRows = periods.map((p, pi) => {
     const cells = [1, 2, 3, 4, 5].map(day => {
       const isToday = day === wdToday;
-      const l = lessonAt(day, pi);
+      const l = lessonAt(day, pi, week);
       if (l) {
         const c = getCourse(l.courseId);
         const col = courseColor(l.courseId);
         const label = c ? `${esc(c.subject)}` : '<span class="tt-missing">entfernt</span>';
         const sub = c ? `${esc(c.className)}${l.room ? ' · ' + esc(l.room) : ''}` : '';
+        /* nur Stunden, die es nicht in beiden Wochen gibt, bekommen die Marke */
+        const mark = ab && (l.week || 0) ? `<span class="tt-ab">${AB_LABEL[l.week]}</span>` : '';
         return `<td class="tt-cell ${isToday ? 'tt-today' : ''}">
           <button class="tt-lesson" data-day="${day}" data-period="${pi}" style="background:${col.bg};color:${col.fg};border-left-color:${col.bar}">
-            <span class="tt-subject">${label}</span><span class="tt-meta">${sub}</span></button></td>`;
+            ${mark}<span class="tt-subject">${label}</span><span class="tt-meta">${sub}</span></button></td>`;
       }
       return `<td class="tt-cell ${isToday ? 'tt-today' : ''} ${planEdit ? 'tt-editable' : ''}">
         ${planEdit ? `<button class="tt-add" data-day="${day}" data-period="${pi}">+</button>` : ''}</td>`;
@@ -947,7 +983,14 @@ function renderHome() {
   }).join('');
 
   const hasLessons = (data.timetable.lessons || []).length > 0;
-  const todayLabel = wdToday ? WEEKDAYS_LONG[wdToday] + ', ' + fmtDateLong(todayISO()) : 'Wochenende — ' + fmtDateLong(todayISO());
+  const wdReal = todayWeekday();
+  const todayLabel = (wdReal ? WEEKDAYS_LONG[wdReal] + ', ' + fmtDateLong(todayISO()) : 'Wochenende — ' + fmtDateLong(todayISO()))
+    + (ab ? ` · Woche ${AB_LABEL[curWeek]}` : '');
+  const weekTabs = ab ? `
+    <div class="tabs">
+      <button class="tab ${week===1?'active':''}" data-tw="1">Woche A${curWeek===1?' <span class="tt-now">jetzt</span>':''}</button>
+      <button class="tab ${week===2?'active':''}" data-tw="2">Woche B${curWeek===2?' <span class="tt-now">jetzt</span>':''}</button>
+    </div>` : '';
 
   app().innerHTML = `
     <section class="dash">
@@ -980,6 +1023,8 @@ function renderHome() {
     ${planEdit ? `<div class="notice">Tippe auf ein Feld, um einen Kurs einzutragen oder zu ändern.</div>`
       : (hasLessons ? '' : `<div class="notice">Noch keine Stunden eingetragen. Tippe auf <b>Plan bearbeiten</b> und fülle das Raster.</div>`)}
 
+    ${weekTabs}
+
     <div class="tt-wrap">
       <table class="tt">
         <thead><tr><th class="tt-corner">Std.</th>${headDays}</tr></thead>
@@ -999,26 +1044,40 @@ function renderHome() {
   document.getElementById('dashTermin').onclick = () => go({ name: 'termine' });
   document.getElementById('btnPeriods').onclick = openPeriodsEditor;
   document.getElementById('btnPlanEdit').onclick = () => { planEdit = !planEdit; renderHome(); };
+  app().querySelectorAll('.tab[data-tw]').forEach(t => t.onclick = () => { planWeek = +t.dataset.tw; renderHome(); });
 
   app().querySelectorAll('.tt-lesson').forEach(b => b.onclick = () => {
     const day = +b.dataset.day, period = +b.dataset.period;
-    if (planEdit) return openLessonEditor(day, period);
-    const l = lessonAt(day, period);
+    if (planEdit) return openLessonEditor(day, period, week);
+    const l = lessonAt(day, period, week);
     if (l && getCourse(l.courseId)) go({ name: 'course', courseId: l.courseId, hy: defaultHalfYear(getCourse(l.courseId)), view: 'simpel' });
-    else openLessonEditor(day, period);
+    else openLessonEditor(day, period, week);
   });
-  app().querySelectorAll('.tt-add').forEach(b => b.onclick = () => openLessonEditor(+b.dataset.day, +b.dataset.period));
+  app().querySelectorAll('.tt-add').forEach(b => b.onclick = () => openLessonEditor(+b.dataset.day, +b.dataset.period, week));
 }
 
-function openLessonEditor(day, period) {
-  const existing = lessonAt(day, period);
+function openLessonEditor(day, period, week) {
+  const ab = abActive();
+  const existing = lessonAt(day, period, week);
   const p = data.timetable.periods[period];
+  /* Vorgabe für den Rhythmus: bestehende Stunde behält ihren, neue gilt für die gezeigte Woche */
+  const curRhythm = existing ? (existing.week || 0) : (week || 0);
   const opts = `<option value="">— frei —</option>` + data.courses.map(c =>
     `<option value="${c.id}" ${existing && existing.courseId === c.id ? 'selected' : ''}>${esc(c.subject)} · ${esc(c.className)}</option>`).join('');
-  modal(`${WEEKDAYS_LONG[day]} · ${p ? esc(p.label) + ' Stunde' : period + 1 + '. Stunde'}`, `
+  const rhythmField = ab ? `
+    <div class="field"><label>Rhythmus</label>
+      <select id="leWeek">
+        <option value="0" ${curRhythm === 0 ? 'selected' : ''}>Jede Woche</option>
+        <option value="1" ${curRhythm === 1 ? 'selected' : ''}>Nur Woche A</option>
+        <option value="2" ${curRhythm === 2 ? 'selected' : ''}>Nur Woche B</option>
+      </select>
+      <div class="hint">„Jede Woche" gilt in A und B. Sollen in diesem Feld zwei verschiedene Kurse liegen, setze diese Stunde auf eine Woche — das Feld der anderen wird dann frei.</div>
+    </div>` : '';
+  modal(`${WEEKDAYS_LONG[day]} · ${p ? esc(p.label) + ' Stunde' : period + 1 + '. Stunde'}${ab ? ' · Woche ' + AB_LABEL[week] : ''}`, `
     ${data.courses.length ? '' : '<div class="notice">Noch keine Kurse vorhanden — lege zuerst einen Kurs an.</div>'}
     <div class="field"><label>Kurs</label><select id="leCourse">${opts}</select></div>
     <div class="field"><label>Raum (optional)</label><input id="leRoom" type="text" value="${esc(existing ? existing.room || '' : '')}" placeholder="z. B. A103"></div>
+    ${rhythmField}
   `, [
     ...(existing ? [{ label: 'Entfernen', cls: 'danger', onClick: () => {
       data.timetable.lessons = data.timetable.lessons.filter(l => l !== existing);
@@ -1027,10 +1086,11 @@ function openLessonEditor(day, period) {
     { label: 'Abbrechen', onClick: closeModal },
     { label: 'Speichern', cls: 'primary', onClick: () => {
       const courseId = val('leCourse'), room = val('leRoom').trim();
+      const w = ab ? (Number(val('leWeek')) || 0) : 0;
       if (!courseId) {
         if (existing) data.timetable.lessons = data.timetable.lessons.filter(l => l !== existing);
-      } else if (existing) { existing.courseId = courseId; existing.room = room; }
-      else data.timetable.lessons.push({ id: uid(), day, period, courseId, room });
+      } else if (existing) { existing.courseId = courseId; existing.room = room; existing.week = w; }
+      else data.timetable.lessons.push({ id: uid(), day, period, courseId, room, week: w });
       save(); closeModal(); renderHome();
     }},
   ]);
@@ -2320,6 +2380,8 @@ function ensureSeating(c) {
   return c.seating;
 }
 function seatKey(x, y) { return `${x},${y}`; }
+/* je mehr Spalten, desto schmaler die Kacheln — Schriftgrößen ziehen mit */
+function seatDensity(cols) { return cols >= 11 ? 'tight' : cols >= 9 ? 'dense' : ''; }
 function seatStudent(c, key) {
   const id = ensureSeating(c).seats[key];
   return id ? c.students.find(s => s.id === id) : null;
@@ -2401,7 +2463,7 @@ function renderSeating() {
       const blind = mode !== 'ha' && blindSpot(c, route.hy, s.id) ? '<span class="blind-dot" title="keine aktuelle mündliche Note"></span>' : '';
       const moving = seatPending && seatPending.type === 'move' && seatPending.key === key ? 'moving' : '';
       cells += `<button class="seat ${cls} ${moving}" data-key="${key}">
-        <span class="seat-name">${esc(s.firstName)}${blind}${infoBadge(s)}</span>
+        <span class="seat-name"><span class="seat-first">${esc(s.firstName)}</span>${blind}${infoBadge(s)}</span>
         <span class="seat-last">${esc(s.lastName || '')}</span>
         ${extra}</button>`;
     }
@@ -2426,7 +2488,7 @@ function renderSeating() {
 
     ${c.students.length ? `
       <div class="seat-board">
-        <div class="seat-grid" style="grid-template-columns:repeat(${st.cols}, minmax(74px, 116px))">${cells}</div>
+        <div class="seat-grid ${seatDensity(st.cols)}" style="grid-template-columns:repeat(${st.cols}, minmax(0, 1fr));max-width:${st.cols * 116 + (st.cols - 1) * 8}px">${cells}</div>
         <div class="seat-front">Tafel · Pult</div>
       </div>
       ${offen.length && mode === 'plan' ? `<div class="calc-block" style="margin-top:16px"><h3>Ohne Platz (${offen.length})</h3>
@@ -3120,6 +3182,22 @@ function openMetaSettings() {
     </div>
     <hr style="border:none;border-top:1px solid var(--line-soft);margin:16px 0">
     <div class="field">
+      <label>Stundenplan — Rhythmus</label>
+      <select id="mAB">
+        <option value="0" ${abActive()?'':'selected'}>Eine Woche — jede Woche derselbe Plan</option>
+        <option value="1" ${abActive()?'selected':''}>Zwei Wochen — Woche A und Woche B im Wechsel</option>
+      </select>
+      <div class="field" id="mABWeekWrap" style="margin-top:10px;${abActive()?'':'display:none'}">
+        <label>Diese Woche ist</label>
+        <select id="mABWeek">
+          <option value="1" ${abActive()&&abWeekOf()===2?'':'selected'}>Woche A</option>
+          <option value="2" ${abActive()&&abWeekOf()===2?'selected':''}>Woche B</option>
+        </select>
+        <div class="hint">Danach wechseln A und B automatisch jede Woche. Bestehende Stunden gelten zunächst in beiden Wochen; im Plan kannst du sie einzeln auf A oder B setzen.</div>
+      </div>
+    </div>
+    <hr style="border:none;border-top:1px solid var(--line-soft);margin:16px 0">
+    <div class="field">
       <label>Notentabelle — Darstellung</label>
       <select id="mLayout">
         <option value="standard" ${(m.tableLayout||'standard')!=='invers'?'selected':''}>Standard (Noten links, Gesamt rechts)</option>
@@ -3148,9 +3226,15 @@ function openMetaSettings() {
       m.ferienDatum = val('mFerienDate'); m.ferienLabel = val('mFerienLabel').trim() || 'Ferien'; m.zeugnisDatum = val('mZeugnis');
       m.tableLayout = val('mLayout') || 'standard';
       m.halfYear = val('mHalfYear') || 'auto';
+      const wantAB = val('mAB') === '1';
+      data.timetable.abWeeks = wantAB;
+      if (wantAB) abSetCurrentWeek(Number(val('mABWeek')) || 1);
+      planWeek = null;
       save(); closeModal(); render();
     }},
   ]);
+  const abSel = document.getElementById('mAB'), abWrap = document.getElementById('mABWeekWrap');
+  abSel.onchange = () => { abWrap.style.display = abSel.value === '1' ? '' : 'none'; };
   document.getElementById('mBackupExport').onclick = exportBackup;
   document.getElementById('mBackupPseudo').onclick = exportBackupPseudonym;
   const fileInput = document.getElementById('mBackupFile');
