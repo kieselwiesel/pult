@@ -427,6 +427,23 @@ input[type=range] { width: 100%; min-width: 0; }
 
 .notice { background: #fff; border: 1px dashed var(--line); border-radius: var(--radius); padding: 12px 14px; font-size: 14px; color: var(--ink-soft); margin-bottom: 14px; }
 
+/* ---------- Einstellungen (eigene Seite) ---------- */
+.settings-page { max-width: 720px; }
+.set-card {
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: var(--shadow); padding: 16px 18px; margin-bottom: 14px;
+}
+.set-card h2 {
+  font-size: 13px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--ink-faint); margin-bottom: 12px;
+  padding-bottom: 8px; border-bottom: 1px solid var(--line-soft);
+}
+.set-card .field:last-child { margin-bottom: 0; }
+.set-card .field + .field { margin-top: 14px; }
+.set-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+.set-danger { border-left: 3px solid var(--g-bad); }
+.topbar-settings.active { background: rgba(255,255,255,.16); color: #fff; }
+
 /* ---------- Zurück (fest unten links) ---------- */
 .backfab {
   position: fixed; z-index: 60;

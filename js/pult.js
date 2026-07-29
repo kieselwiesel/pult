@@ -36,6 +36,7 @@ const DEFAULT_DATA = () => ({
   },
   todos: [],           // { id, text, done, created, due, courseId|null }
   termine: [],         // { id, title, date, start, end, allDay, location, note, courseId|null, uid }
+  history: [],         // Notenprotokoll, siehe unten — { id, at, label, courseId, changes[], undone }
 });
 
 /* Standard-Stundenraster (editierbar unter „Zeiten") */
@@ -79,6 +80,181 @@ function save() {
   catch (e) { toast('Speichern fehlgeschlagen (Speicher voll?)'); }
 }
 const uid = () => Math.random().toString(36).slice(2, 9);
+
+/* ============================================================
+   Notenprotokoll (Rückgängig)
+   ------------------------------------------------------------
+   Festgehalten wird nur, was Noten betrifft: eingetragene, geänderte und
+   entfernte Werte, manuelle Überschreibungen sowie Löschungen, die Noten
+   mitnehmen (Schüler:in, Notenspalte, Klassenarbeit, Kurs).
+
+   Ein Eintrag speichert keine Kopie des ganzen Datenbestands, sondern nur die
+   betroffenen Stellen mit Wert davor/danach. Dadurch bleibt das Protokoll
+   klein, jeder Eintrag lässt sich einzeln zurücknehmen, und es übersteht einen
+   Neustart (es liegt in den Daten und damit auch im Backup).
+   ============================================================ */
+const HISTORY_MAX = 60;
+/* Einträge derselben Stelle innerhalb dieser Zeit werden zusammengefasst,
+   damit Tippen in einem Feld nicht das halbe Protokoll füllt. */
+const HISTORY_MERGE_MS = 60 * 1000;
+
+const histClone = v => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
+const histSame = (a, b) => JSON.stringify(a === undefined ? null : a) === JSON.stringify(b === undefined ? null : b);
+
+/* Ein Pfad beschreibt eine Stelle in `data`, z. B. ['grades', sId, colId].
+   Steht dort ein Array, gilt das nächste Stück als id des Elements —
+   ['courses', cId, 'students'] meint also die Schülerliste dieses Kurses. */
+function pathStep(node, key) {
+  if (node == null) return undefined;
+  if (Array.isArray(node)) return node.find(x => x && x.id === key);
+  return node[key];
+}
+function pathGet(path) {
+  let node = data;
+  for (const key of path) { node = pathStep(node, key); if (node == null) return node === null ? null : undefined; }
+  return histClone(node);
+}
+/* Wert an einen Pfad schreiben (undefined = Schlüssel entfernen).
+   false, wenn das Ziel nicht mehr existiert — etwa ein gelöschter Kurs. */
+function pathSet(path, value) {
+  let node = data;
+  for (let i = 0; i < path.length - 1; i++) {
+    let next = pathStep(node, path[i]);
+    if (next == null) {
+      if (Array.isArray(node)) return false;
+      next = {}; node[path[i]] = next;
+    }
+    node = next;
+  }
+  const last = path[path.length - 1];
+  if (Array.isArray(node) || node == null) return false;
+  if (value === undefined) delete node[last]; else node[last] = histClone(value);
+  return true;
+}
+
+/* Zustand der Pfade festhalten — vor der Änderung aufrufen */
+function beginChange(paths) { return paths.map(p => ({ path: p, before: pathGet(p) })); }
+/* … und nach der Änderung mit einer Beschriftung abschließen.
+   opts: { courseId, mergeKey } */
+function commitChange(label, snap, opts) {
+  opts = opts || {};
+  const changes = snap
+    .map(ch => ({ path: ch.path, before: ch.before, after: pathGet(ch.path) }))
+    .filter(ch => !histSame(ch.before, ch.after));
+  if (!changes.length) return;                       // nichts passiert, nichts protokollieren
+  if (!Array.isArray(data.history)) data.history = [];
+  const now = new Date();
+  const last = data.history[data.history.length - 1];
+  if (opts.mergeKey && last && last.mergeKey === opts.mergeKey && !last.undone &&
+      now - new Date(last.at) < HISTORY_MERGE_MS) {
+    /* gleiche Stelle, kurz danach: alten „davor"-Wert behalten, Rest ersetzen */
+    changes.forEach(ch => {
+      const prev = last.changes.find(x => histSame(x.path, ch.path));
+      if (prev) prev.after = ch.after; else last.changes.push(ch);
+    });
+    last.changes = last.changes.filter(ch => !histSame(ch.before, ch.after));
+    if (!last.changes.length) { data.history.pop(); return; }   // wieder auf Anfang: Eintrag entfällt
+    last.label = label; last.at = now.toISOString();
+    return;
+  }
+  data.history.push({
+    id: uid(), at: now.toISOString(), label,
+    courseId: opts.courseId || null, mergeKey: opts.mergeKey || null, changes,
+  });
+  while (data.history.length > HISTORY_MAX) data.history.shift();
+}
+
+/* Bequemer Weg für den Normalfall: eine einzelne Note setzen.
+   store: 'grades' (Notenspalte) | 'sonstigeValues' (Bonus) */
+function gradeStr(v, c) { return v == null ? 'leer' : fmtGrade(v, c ? c.scale : 'punkte', false); }
+function setGradeLogged(c, store, sId, key, v, what) {
+  const snap = beginChange([[store, sId, key]]);
+  if (!data[store][sId]) data[store][sId] = {};
+  if (v == null) delete data[store][sId][key]; else data[store][sId][key] = v;
+  const s = c && c.students.find(x => x.id === sId);
+  commitChange(`${s ? studentName(s) : 'Schüler:in'} — ${what}: ${gradeStr(snap[0].before, c)} → ${gradeStr(v, c)}`,
+    snap, { courseId: c && c.id, mergeKey: `${store}:${sId}:${key}` });
+  save();
+}
+/* Sonstige Leistung über beide Halbjahre suchen (ids sind eindeutig) */
+function findSonstige(c, soId) {
+  return c.halfYears['1'].sonstige.find(x => x.id === soId)
+      || c.halfYears['2'].sonstige.find(x => x.id === soId) || null;
+}
+/* Wie viele Noten hängen an einer Spalte / an Schüler:innen? (für Lösch-Beschriftungen) */
+function gradeCountForColumn(c, colId) {
+  return c.students.filter(s => (data.grades[s.id] || {})[colId] != null).length;
+}
+function gradeCountForStudent(sId) {
+  return Object.keys(data.grades[sId] || {}).filter(k => data.grades[sId][k] != null).length;
+}
+
+/* Einen Eintrag zurücknehmen (oder eine Rücknahme wieder herstellen) */
+function applyHistoryEntry(entryId, direction) {
+  const e = (data.history || []).find(x => x.id === entryId);
+  if (!e) return;
+  const target = direction === 'redo' ? 'after' : 'before';
+  const expect = direction === 'redo' ? 'before' : 'after';
+  /* Wurde die Stelle seither erneut geändert, ist das Zurücknehmen nicht mehr eindeutig. */
+  const drifted = e.changes.some(ch => !histSame(pathGet(ch.path), ch[expect]));
+  const run = () => {
+    let ok = true;
+    e.changes.forEach(ch => { if (!pathSet(ch.path, ch[target])) ok = false; });
+    e.undone = direction === 'redo' ? null : new Date().toISOString();
+    save();
+    toast(ok ? (direction === 'redo' ? 'Wiederhergestellt.' : 'Rückgängig gemacht.')
+             : 'Nur teilweise möglich — ein Ziel existiert nicht mehr.');
+    render();
+    openHistory(historyScope);
+  };
+  if (!drifted) return run();
+  modal('Sicher?', `<p>Diese Stelle wurde seit dem Eintrag noch einmal geändert. Beim Zurücknehmen geht die neuere Änderung verloren.</p>
+    <p><b>${esc(e.label)}</b></p>`, [
+    { label: 'Abbrechen', onClick: () => openHistory(historyScope) },
+    { label: 'Trotzdem zurücknehmen', cls: 'danger', onClick: run },
+  ]);
+}
+
+/* Zeitstempel menschlich: „Heute, 14:32" */
+function fmtHistTime(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  const time = d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+  const days = Math.round((new Date().setHours(0,0,0,0) - new Date(d).setHours(0,0,0,0)) / 86400000);
+  const day = days === 0 ? 'Heute' : days === 1 ? 'Gestern'
+    : d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  return `${day}, ${time} Uhr`;
+}
+
+let historyScope = null;   // null = alle Kurse, sonst courseId
+function openHistory(courseId) {
+  historyScope = courseId || null;
+  const all = (data.history || []).slice().reverse();
+  const list = historyScope ? all.filter(e => e.courseId === historyScope) : all;
+  const scopeCourse = historyScope ? getCourse(historyScope) : null;
+
+  const rows = list.map(e => {
+    const c = e.courseId ? getCourse(e.courseId) : null;
+    const where = scopeCourse ? '' : (c ? ` · ${esc(c.subject)} ${esc(c.className)}` : '');
+    return `<div class="chip" style="${e.undone ? 'opacity:.55' : ''}">
+      <div class="chip-main">
+        <b>${esc(e.label)}</b>
+        <span>${fmtHistTime(e.at)}${where}${e.undone ? ' · zurückgenommen' : ''}</span>
+      </div>
+      <button class="btn small ${e.undone ? '' : 'danger'}" data-${e.undone ? 'redo' : 'undo'}="${e.id}">${e.undone ? 'Wiederherstellen' : 'Rückgängig'}</button>
+    </div>`;
+  }).join('') || `<div class="notice">Noch nichts protokolliert.</div>`;
+
+  modal(scopeCourse ? `Notenprotokoll — ${esc(scopeCourse.subject)} ${esc(scopeCourse.className)}` : 'Notenprotokoll', `
+    <div class="notice">Die letzten ${HISTORY_MAX} Änderungen an Noten${scopeCourse ? ' in diesem Kurs' : ''} — jeweils einzeln zurücknehmbar.</div>
+    <div class="chip-list">${rows}</div>
+  `, [
+    ...(scopeCourse ? [{ label: 'Alle Kurse', onClick: () => openHistory(null) }] : []),
+    { label: 'Schließen', cls: 'primary', onClick: () => { closeModal(); render(); } },
+  ]);
+  document.querySelectorAll('[data-undo]').forEach(b => b.onclick = () => applyHistoryEntry(b.dataset.undo, 'undo'));
+  document.querySelectorAll('[data-redo]').forEach(b => b.onclick = () => applyHistoryEntry(b.dataset.redo, 'redo'));
+}
 
 /* ---------- Beispiel-Datensätze beim ersten Start ---------- */
 /* deterministischer Zufall, damit die Beispielnoten stabil bleiben */
@@ -552,6 +728,7 @@ function samePage(a, b) {
          a.studentId === b.studentId && a.columnId === b.columnId;
 }
 function go(r) {
+  closeModal();                     // ein Seitenwechsel lässt kein Fenster offen stehen
   const next = Object.assign({}, route, r);
   if (!samePage(next, route)) {
     navStack.push(route);
@@ -777,6 +954,8 @@ function pseudonymizeData(d) {
     /* Kurzinfos (z. B. Nachteilsausgleich) sind personenbezogen und fliegen mit raus */
     ordered.forEach((s, i) => { s.firstName = String(i + 1).padStart(2, '0'); s.lastName = ''; s.info = ''; });
   });
+  /* Im Notenprotokoll stehen Klarnamen in den Beschriftungen — fliegt komplett raus */
+  d.history = [];
   return d;
 }
 /* Pseudonymisiertes Backup zum Teilen/Ablegen ohne Namen.
@@ -825,6 +1004,7 @@ function render() {
   if (route.name === 'courses') return renderCourses();
   if (route.name === 'todos') return renderTodos();
   if (route.name === 'termine') return renderTermine();
+  if (route.name === 'settings') return renderSettings();
   return renderHome();
 }
 /* Hauptseiten. „home" (Stundenplan) hängt an der Wortmarke „Pult." und
@@ -852,8 +1032,9 @@ function renderTopNav() {
 function renderTopbarRight() {
   /* Zurück liegt unten links (backFab), oben rechts stehen die Einstellungen — auf jeder Seite. */
   const el = document.getElementById('topbarRight');
-  el.innerHTML = `<button class="btn ghost small topbar-settings" id="btnSettings">Einstellungen</button>`;
-  document.getElementById('btnSettings').onclick = openMetaSettings;
+  const active = route.name === 'settings' ? ' active' : '';
+  el.innerHTML = `<button class="btn ghost small topbar-settings${active}" id="btnSettings">Einstellungen</button>`;
+  document.getElementById('btnSettings').onclick = () => go({ name: 'settings' });
 }
 /* „Zurück" nur zeigen, wenn es eine vorherige Seite gibt */
 function renderBackFab() {
@@ -1038,8 +1219,8 @@ function renderHome() {
   `;
 
   document.getElementById('backupHint').onclick = exportBackup;
-  document.getElementById('dashFerien').onclick = openMetaSettings;
-  document.getElementById('dashZeugnis').onclick = openMetaSettings;
+  document.getElementById('dashFerien').onclick = () => go({ name: 'settings' });
+  document.getElementById('dashZeugnis').onclick = () => go({ name: 'settings' });
   document.getElementById('dashTodos').onclick = () => go({ name: 'todos' });
   document.getElementById('dashTermin').onclick = () => go({ name: 'termine' });
   document.getElementById('btnPeriods').onclick = openPeriodsEditor;
@@ -1515,18 +1696,17 @@ function renderStudent() {
     if (col.ka) return go({ name: 'ka', courseId: c.id, columnId: col.id, kaTab: 'eingabe' });
     const cur = (data.grades[s.id] || {})[col.id];
     openPad(`${esc(s.firstName)} — ${esc(col.label)}`, cur, v => {
-      if (!data.grades[s.id]) data.grades[s.id] = {};
-      if (v == null) delete data.grades[s.id][col.id]; else data.grades[s.id][col.id] = v;
-      save(); renderStudent();
+      setGradeLogged(c, 'grades', s.id, col.id, v, col.label);
+      renderStudent();
     }, scale);
   });
   app().querySelectorAll('.sd-sonst').forEach(row => row.onclick = () => {
     const soId = row.dataset.so;
+    const so = findSonstige(c, soId);
     const cur = (data.sonstigeValues[s.id] || {})[soId];
     openPad(`${esc(s.firstName)} — Bonus`, cur, v => {
-      if (!data.sonstigeValues[s.id]) data.sonstigeValues[s.id] = {};
-      if (v == null) delete data.sonstigeValues[s.id][soId]; else data.sonstigeValues[s.id][soId] = v;
-      save(); renderStudent();
+      setGradeLogged(c, 'sonstigeValues', s.id, soId, v, `${so ? so.label : 'Bonus'} (Bonus)`);
+      renderStudent();
     }, scale);
   });
   app().querySelectorAll('.sd-calc').forEach(b => b.onclick = () => { route.hy = b.dataset.hy; openCalc(c, s.id, 'gesamt'); });
@@ -1623,6 +1803,8 @@ function renderKaEingabe(c, col) {
     inp.oninput = () => {
       const sId = inp.dataset.s, taskId = inp.dataset.task;
       const task = col.ka.tasks.find(t => t.id === taskId);
+      /* Punkte und die daraus errechnete Note gehören zusammen ins Protokoll */
+      const snap = beginChange([['kaPoints', sId, col.id, taskId], ['grades', sId, col.id]]);
       if (!data.kaPoints[sId]) data.kaPoints[sId] = {};
       if (!data.kaPoints[sId][col.id]) data.kaPoints[sId][col.id] = {};
       const store = data.kaPoints[sId][col.id];
@@ -1637,6 +1819,10 @@ function renderKaEingabe(c, col) {
       body.querySelector(`[data-pct="${sId}"] .cell`).textContent = tot.percent==null?'–':Math.round(tot.percent)+'%';
       body.querySelector(`[data-note="${sId}"]`).innerHTML = kaNoteCell(tot.grade, c.scale);
       syncKaGrades(c, col);
+      const st = c.students.find(x => x.id === sId);
+      const shown = inp.value === '' ? 'leer' : `${fmtNum(store[taskId])} P.`;
+      commitChange(`${st ? studentName(st) : 'Schüler:in'} — ${col.label} · ${task.label}: ${shown} (Note ${gradeStr(tot.grade, c)})`,
+        snap, { courseId: c.id, mergeKey: `ka:${sId}:${col.id}:${taskId}` });
       save();
     };
   });
@@ -1741,9 +1927,14 @@ function confirmDeleteKA(c, col) {
     { label: 'Abbrechen', onClick: closeModal },
     { label: 'Löschen', cls: 'danger', onClick: () => {
       const hy = c.halfYears[route.hy];
+      const n = gradeCountForColumn(c, col.id);
+      const snap = beginChange([['courses', c.id, 'halfYears', route.hy, 'columns'],
+        ...c.students.map(s => ['grades', s.id, col.id]),
+        ...c.students.map(s => ['kaPoints', s.id, col.id])]);
       hy.columns = hy.columns.filter(x => x.id !== col.id);
       Object.values(data.grades).forEach(g => delete g[col.id]);
       Object.values(data.kaPoints).forEach(k => delete k[col.id]);
+      commitChange(`Klassenarbeit „${col.label}" gelöscht (${n} ${n === 1 ? 'Note' : 'Noten'})`, snap, { courseId: c.id });
       save(); closeModal(); go({ name: 'course', courseId: c.id });
     }},
   ]);
@@ -2053,9 +2244,8 @@ function openGradeCell(c, sId, colId) {
   if (col && col.ka) return go({ name: 'ka', courseId: c.id, columnId: col.id, kaTab: 'eingabe' });
   const cur = (data.grades[sId] || {})[colId];
   openPad(`${esc(s.firstName)} ${esc(s.lastName||'')} — ${esc(col.label)}`, cur, v => {
-    if (!data.grades[sId]) data.grades[sId] = {};
-    if (v == null) delete data.grades[sId][colId]; else data.grades[sId][colId] = v;
-    save(); renderTable(c);
+    setGradeLogged(c, 'grades', sId, colId, v, col.label);
+    renderTable(c);
   }, c.scale);
 }
 function openSonstCell(c, sId, soId) {
@@ -2063,9 +2253,8 @@ function openSonstCell(c, sId, soId) {
   const so = c.halfYears[route.hy].sonstige.find(x => x.id === soId);
   const cur = (data.sonstigeValues[sId] || {})[soId];
   openPad(`${esc(s.firstName)} ${esc(s.lastName||'')} — ${esc(so.label)} (Bonus)`, cur, v => {
-    if (!data.sonstigeValues[sId]) data.sonstigeValues[sId] = {};
-    if (v == null) delete data.sonstigeValues[sId][soId]; else data.sonstigeValues[sId][soId] = v;
-    save(); renderTable(c);
+    setGradeLogged(c, 'sonstigeValues', sId, soId, v, `${so.label} (Bonus)`);
+    renderTable(c);
   }, c.scale);
 }
 
@@ -2132,15 +2321,19 @@ function openCalcGesamt(c, s, name) {
   `, [
     { label: 'Abbrechen', onClick: closeModal },
     { label: 'Speichern', cls: 'primary', onClick: () => {
+      const manKey = hyKey === '1' ? 'g1' : 'g2';
+      const snap = beginChange([['weightOverride', s.id, hyKey], ['manual', s.id, manKey]]);
       const w = clamp(parseInt(val('cwW')) || 0, 0, 100);
       if (!data.weightOverride[s.id]) data.weightOverride[s.id] = {};
       if (w === c.weightWritten) delete data.weightOverride[s.id][hyKey];
       else data.weightOverride[s.id][hyKey] = w;
-      const manKey = hyKey === '1' ? 'g1' : 'g2';
       if (!data.manual[s.id]) data.manual[s.id] = {};
       const mv = val('cManual');
       if (mv === '') delete data.manual[s.id][manKey];
       else data.manual[s.id][manKey] = clamp(parseInt(mv) || 0, 0, 15);
+      const mNow = data.manual[s.id][manKey];
+      commitChange(`${name} — Gesamtnote ${hyKey}. Halbjahr ${mNow == null ? 'wieder berechnet' : 'manuell: ' + gradeStr(mNow, c)}`,
+        snap, { courseId: c.id });
       save(); closeModal(); render();
     }},
   ]);
@@ -2178,12 +2371,16 @@ function openCalcEndjahr(c, s, name) {
   `, [
     { label: 'Abbrechen', onClick: closeModal },
     { label: 'Speichern', cls: 'primary', onClick: () => {
+      const snap = beginChange([['manual', s.id, 'end']]);
       const w1 = clamp(parseInt(val('ehW1')) || 0, 0, 100);
       c.weightHY1 = w1; c.weightHY2 = 100 - w1;
       if (!data.manual[s.id]) data.manual[s.id] = {};
       const mv = val('ehManual');
       if (mv === '') delete data.manual[s.id].end;
       else data.manual[s.id].end = clamp(parseInt(mv) || 0, 0, 15);
+      const mNow = data.manual[s.id].end;
+      commitChange(`${name} — Endjahresnote ${mNow == null ? 'wieder berechnet' : 'manuell: ' + gradeStr(mNow, c)}`,
+        snap, { courseId: c.id });
       save(); closeModal(); render();
     }},
   ]);
@@ -2540,9 +2737,8 @@ function renderSeating() {
     if (mode === 'note') {
       if (!noteCol) return toast('Erst eine mündliche Spalte anlegen.');
       return openPad(`${studentName(s)} — ${noteCol.label}`, (data.grades[s.id] || {})[noteCol.id], v => {
-        if (!data.grades[s.id]) data.grades[s.id] = {};
-        if (v == null) delete data.grades[s.id][noteCol.id]; else data.grades[s.id][noteCol.id] = v;
-        save(); renderSeating();
+        setGradeLogged(c, 'grades', s.id, noteCol.id, v, noteCol.label);
+        renderSeating();
       }, c.scale);
     }
     if (!sess) return toast('Erst eine Erhebung anlegen.');
@@ -2712,7 +2908,7 @@ function openDurchtippen(c, colId, idx) {
     { label: 'Weiter ohne Note ›', cls: 'primary', onClick: () => openDurchtippen(c, colId, idx + 1) },
   ]);
   document.querySelectorAll('.gradepad button').forEach(b => b.onclick = () => {
-    if (b.dataset.p !== 'skip') { if (!data.grades[s.id]) data.grades[s.id] = {}; data.grades[s.id][colId] = parseInt(b.dataset.p); save(); }
+    if (b.dataset.p !== 'skip') setGradeLogged(c, 'grades', s.id, colId, parseInt(b.dataset.p), col.label);
     openDurchtippen(c, colId, idx + 1);
   });
 }
@@ -2723,8 +2919,10 @@ function openMoreMenu(c) {
     <button class="btn" style="width:100%" id="mmHa">Hausaufgaben protokollieren</button>
     <button class="btn" style="width:100%" id="mmNotes">Kursnotizen</button>
     <button class="btn" style="width:100%" id="mmLists">Einsammel-Listen</button>
+    <button class="btn" style="width:100%" id="mmLog">Notenprotokoll</button>
     <button class="btn" style="width:100%" id="mmEdit">Kurs bearbeiten</button>
   </div>`, [{ label: 'Schließen', onClick: closeModal }]);
+  document.getElementById('mmLog').onclick = () => openHistory(c.id);
   document.getElementById('mmHa').onclick = () => { closeModal(); go({ name: 'ha', courseId: c.id }); };
   document.getElementById('mmNotes').onclick = () => openNotes(c, null);
   document.getElementById('mmLists').onclick = () => openLists(c);
@@ -2884,10 +3082,15 @@ function confirmDeleteCourse(c) {
   modal('Kurs löschen?', `<p>Der Kurs <b>${esc(c.subject)} ${esc(c.className)}</b> und alle zugehörigen Noten werden gelöscht.</p>`, [
     { label: 'Abbrechen', onClick: () => openCourseForm(c) },
     { label: 'Endgültig löschen', cls: 'danger', onClick: () => {
+      const n = c.students.reduce((a, s) => a + gradeCountForStudent(s.id), 0);
+      const snap = beginChange([['courses'], ['notes'], ['lists'],
+        ...c.students.flatMap(s => [['grades', s.id], ['sonstigeValues', s.id], ['manual', s.id],
+          ['weightOverride', s.id], ['kaPoints', s.id]])]);
       c.students.forEach(s => { delete data.grades[s.id]; delete data.sonstigeValues[s.id]; delete data.manual[s.id]; delete data.weightOverride[s.id]; delete data.kaPoints[s.id]; });
       data.notes = data.notes.filter(n => n.courseId !== c.id);
       data.lists = data.lists.filter(l => l.courseId !== c.id);
       data.courses = data.courses.filter(x => x.id !== c.id);
+      commitChange(`Kurs „${c.subject} ${c.className}" gelöscht (${c.students.length} Schüler:innen, ${n} ${n === 1 ? 'Note' : 'Noten'})`, snap);
       save(); closeModal(); go({ name: 'home' });
     }},
   ]);
@@ -2911,8 +3114,12 @@ function openColumnForm(c, type, colId) {
     </div>
   `, [
     ...(editing ? [{ label: 'Löschen', cls: 'danger', onClick: () => {
+      const n = gradeCountForColumn(c, col.id);
+      const snap = beginChange([['courses', c.id, 'halfYears', route.hy, 'columns'],
+        ...c.students.map(s => ['grades', s.id, col.id])]);
       hy.columns = hy.columns.filter(x => x.id !== col.id);
       Object.values(data.grades).forEach(g => delete g[col.id]);
+      commitChange(`Spalte „${col.label}" gelöscht (${n} ${n === 1 ? 'Note' : 'Noten'})`, snap, { courseId: c.id });
       save(); closeModal(); renderCourse();
     }}] : []),
     { label: 'Abbrechen', onClick: closeModal },
@@ -3003,12 +3210,16 @@ function openSonstigeValues(c) {
       <tbody>${rows}</tbody></table>
     </div>
   `, [{ label: 'Speichern', cls: 'primary', onClick: () => {
-    document.querySelectorAll('.modal-body input[data-so]').forEach(inp => {
+    const inputs = Array.from(document.querySelectorAll('.modal-body input[data-so]'));
+    const snap = beginChange(inputs.map(inp => ['sonstigeValues', inp.dataset.s, inp.dataset.so]));
+    inputs.forEach(inp => {
       const sId = inp.dataset.s, soId = inp.dataset.so;
       if (!data.sonstigeValues[sId]) data.sonstigeValues[sId] = {};
       if (inp.value === '') delete data.sonstigeValues[sId][soId];
       else data.sonstigeValues[sId][soId] = clamp(parseInt(inp.value) || 0, 0, 15);
     });
+    const n = snap.filter(ch => !histSame(ch.before, pathGet(ch.path))).length;
+    commitChange(`Sonstige Leistungen bearbeitet (${n} ${n === 1 ? 'Wert' : 'Werte'})`, snap, { courseId: c.id });
     save(); closeModal(); renderTable(c);
   }}]);
 }
@@ -3041,14 +3252,22 @@ function openStudents(c) {
   });
   document.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => openStudentForm(c, b.dataset.edit));
   document.querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
-    c.students = c.students.filter(x => x.id !== b.dataset.del);
-    delete data.grades[b.dataset.del]; delete data.sonstigeValues[b.dataset.del];
-    delete data.manual[b.dataset.del]; delete data.weightOverride[b.dataset.del];
-    delete data.kaPoints[b.dataset.del];
-    data.notes = data.notes.filter(n => n.studentId !== b.dataset.del);
+    const sId = b.dataset.del;
+    const s = c.students.find(x => x.id === sId);
+    const n = gradeCountForStudent(sId);
+    /* Löschen nimmt alle Noten mit — deshalb kommt der komplette Datensatz ins Protokoll */
+    const snap = beginChange([['courses', c.id, 'students'], ['grades', sId], ['sonstigeValues', sId],
+      ['manual', sId], ['weightOverride', sId], ['kaPoints', sId], ['notes'],
+      ...(c.seating && c.seating.seats ? [['courses', c.id, 'seating', 'seats']] : [])]);
+    c.students = c.students.filter(x => x.id !== sId);
+    delete data.grades[sId]; delete data.sonstigeValues[sId];
+    delete data.manual[sId]; delete data.weightOverride[sId];
+    delete data.kaPoints[sId];
+    data.notes = data.notes.filter(n => n.studentId !== sId);
     if (c.seating && c.seating.seats) {
-      Object.keys(c.seating.seats).forEach(k => { if (c.seating.seats[k] === b.dataset.del) delete c.seating.seats[k]; });
+      Object.keys(c.seating.seats).forEach(k => { if (c.seating.seats[k] === sId) delete c.seating.seats[k]; });
     }
+    commitChange(`Schüler:in „${s ? studentName(s) : '?'}" gelöscht (${n} ${n === 1 ? 'Note' : 'Noten'})`, snap, { courseId: c.id });
     save(); openStudents(c);
   });
 }
@@ -3159,82 +3378,125 @@ function openImport(c) {
   };
 }
 
-/* ---------- Termine / Meta ---------- */
-function openMetaSettings() {
+/* ============================================================
+   Einstellungen — eigene Seite
+   ------------------------------------------------------------
+   Jede Einstellung wird sofort gespeichert (kein Speichern-Knopf), damit
+   nichts verloren geht, wenn man die Seite einfach verlässt.
+   ============================================================ */
+function renderSettings() {
   const m = data.meta;
-  modal('Einstellungen', `
-    <div class="field"><label>Nächster Ferienbeginn</label>
-      <div class="row2">
-        <input id="mFerienDate" type="date" value="${m.ferienDatum||''}">
-        <input id="mFerienLabel" type="text" value="${esc(m.ferienLabel||'')}" placeholder="z. B. Sommerferien">
-      </div>
+
+  app().innerHTML = `
+    <div class="page-head">
+      <div><h1>Einstellungen</h1><div class="sub">Änderungen werden sofort gespeichert.</div></div>
     </div>
-    <div class="field"><label>Nächste Zeugniskonferenz</label><input id="mZeugnis" type="date" value="${m.zeugnisDatum||''}"></div>
-    <hr style="border:none;border-top:1px solid var(--line-soft);margin:16px 0">
-    <div class="field">
-      <label>Aktuelles Halbjahr</label>
-      <select id="mHalfYear">
-        <option value="auto" ${(m.halfYear||'auto')==='auto'?'selected':''}>Automatisch — 2. Halbjahr, sobald dort Noten stehen</option>
-        <option value="1" ${m.halfYear==='1'?'selected':''}>Immer 1. Halbjahr</option>
-        <option value="2" ${m.halfYear==='2'?'selected':''}>Immer 2. Halbjahr</option>
-      </select>
-      <div class="hint">Legt fest, welches Halbjahr beim Öffnen eines Kurses angezeigt wird. Umschalten geht im Kurs jederzeit.</div>
+
+    <div class="settings-page">
+      <section class="set-card">
+        <h2>Schuljahr</h2>
+        <div class="field"><label>Nächster Ferienbeginn</label>
+          <div class="row2">
+            <input id="mFerienDate" type="date" value="${m.ferienDatum||''}">
+            <input id="mFerienLabel" type="text" value="${esc(m.ferienLabel||'')}" placeholder="z. B. Sommerferien">
+          </div>
+        </div>
+        <div class="field"><label>Nächste Zeugniskonferenz</label><input id="mZeugnis" type="date" value="${m.zeugnisDatum||''}"></div>
+        <div class="field">
+          <label>Aktuelles Halbjahr</label>
+          <select id="mHalfYear">
+            <option value="auto" ${(m.halfYear||'auto')==='auto'?'selected':''}>Automatisch — 2. Halbjahr, sobald dort Noten stehen</option>
+            <option value="1" ${m.halfYear==='1'?'selected':''}>Immer 1. Halbjahr</option>
+            <option value="2" ${m.halfYear==='2'?'selected':''}>Immer 2. Halbjahr</option>
+          </select>
+          <div class="hint">Legt fest, welches Halbjahr beim Öffnen eines Kurses angezeigt wird. Umschalten geht im Kurs jederzeit.</div>
+        </div>
+      </section>
+
+      <section class="set-card">
+        <h2>Stundenplan</h2>
+        <div class="field">
+          <label>Rhythmus</label>
+          <select id="mAB">
+            <option value="0" ${abActive()?'':'selected'}>Eine Woche — jede Woche derselbe Plan</option>
+            <option value="1" ${abActive()?'selected':''}>Zwei Wochen — Woche A und Woche B im Wechsel</option>
+          </select>
+        </div>
+        <div class="field" id="mABWeekWrap" style="${abActive()?'':'display:none'}">
+          <label>Diese Woche ist</label>
+          <select id="mABWeek">
+            <option value="1" ${abActive()&&abWeekOf()===2?'':'selected'}>Woche A</option>
+            <option value="2" ${abActive()&&abWeekOf()===2?'selected':''}>Woche B</option>
+          </select>
+          <div class="hint">Danach wechseln A und B automatisch jede Woche. Bestehende Stunden gelten zunächst in beiden Wochen; im Plan kannst du sie einzeln auf A oder B setzen.</div>
+        </div>
+      </section>
+
+      <section class="set-card">
+        <h2>Notentabelle</h2>
+        <div class="field">
+          <label>Darstellung</label>
+          <select id="mLayout">
+            <option value="standard" ${(m.tableLayout||'standard')!=='invers'?'selected':''}>Standard (Noten links, Gesamt rechts)</option>
+            <option value="invers" ${m.tableLayout==='invers'?'selected':''}>Invertierte Liste (Gesamt & Neuestes zuerst links)</option>
+          </select>
+          <div class="hint">Invertiert: Name · Gesamt · HA · Sonstige · Ø schriftlich + schriftliche Noten · Ø mündlich + mündliche Noten — jeweils das Neueste ganz links.</div>
+        </div>
+      </section>
+
+      <section class="set-card">
+        <h2>Notenprotokoll</h2>
+        <div class="field">
+          <button class="btn" id="mLog">Protokoll öffnen</button>
+          <div class="hint">Die letzten ${HISTORY_MAX} Änderungen an Noten — mit Datum, Uhrzeit und einzeln rückgängig zu machen. Eingetragen werden Noten, Bonuswerte, Klassenarbeits-Punkte, manuelle Überschreibungen und Löschungen, die Noten mitnehmen.</div>
+        </div>
+      </section>
+
+      <section class="set-card">
+        <h2>Datensicherung</h2>
+        <div class="field">
+          <div class="set-buttons">
+            <button class="btn" id="mBackupExport">Backup mit Namen</button>
+            <button class="btn" id="mBackupPseudo">Backup pseudonym</button>
+            <button class="btn" id="mBackupImport">Backup einlesen</button>
+            <input type="file" id="mBackupFile" accept="application/json,.json" hidden>
+          </div>
+          <div class="hint">${m.lastBackup ? 'Letztes Backup: '+fmtDateLong(m.lastBackup) : 'Noch kein Backup erstellt.'} Daten liegen nur in diesem Browser — regelmäßig sichern.</div>
+          <div class="hint"><b>Pseudonym:</b> Schülernamen werden durch Nummern ersetzt (alphabetisch nach Nachname, je Kurs) — zum Teilen/Ablegen ohne Namen. Freitext in Notizen, Todos und Terminen wird dabei <b>nicht</b> anonymisiert; zählt nicht als Namens-Sicherung. Das Notenprotokoll bleibt außen vor, weil dort Klarnamen stehen.</div>
+        </div>
+      </section>
+
+      <section class="set-card set-danger">
+        <h2>Alles löschen</h2>
+        <div class="field">
+          <button class="btn danger" id="mReset">Alle Daten zurücksetzen</button>
+          <div class="hint">Löscht sämtliche Kurse, Schüler:innen und Noten aus diesem Browser. Vorher ein Backup ziehen.</div>
+        </div>
+      </section>
     </div>
-    <hr style="border:none;border-top:1px solid var(--line-soft);margin:16px 0">
-    <div class="field">
-      <label>Stundenplan — Rhythmus</label>
-      <select id="mAB">
-        <option value="0" ${abActive()?'':'selected'}>Eine Woche — jede Woche derselbe Plan</option>
-        <option value="1" ${abActive()?'selected':''}>Zwei Wochen — Woche A und Woche B im Wechsel</option>
-      </select>
-      <div class="field" id="mABWeekWrap" style="margin-top:10px;${abActive()?'':'display:none'}">
-        <label>Diese Woche ist</label>
-        <select id="mABWeek">
-          <option value="1" ${abActive()&&abWeekOf()===2?'':'selected'}>Woche A</option>
-          <option value="2" ${abActive()&&abWeekOf()===2?'selected':''}>Woche B</option>
-        </select>
-        <div class="hint">Danach wechseln A und B automatisch jede Woche. Bestehende Stunden gelten zunächst in beiden Wochen; im Plan kannst du sie einzeln auf A oder B setzen.</div>
-      </div>
-    </div>
-    <hr style="border:none;border-top:1px solid var(--line-soft);margin:16px 0">
-    <div class="field">
-      <label>Notentabelle — Darstellung</label>
-      <select id="mLayout">
-        <option value="standard" ${(m.tableLayout||'standard')!=='invers'?'selected':''}>Standard (Noten links, Gesamt rechts)</option>
-        <option value="invers" ${m.tableLayout==='invers'?'selected':''}>Invertierte Liste (Gesamt & Neuestes zuerst links)</option>
-      </select>
-      <div class="hint">Invertiert: Name · Gesamt · HA · Sonstige · Ø schriftlich + schriftliche Noten · Ø mündlich + mündliche Noten — jeweils das Neueste ganz links.</div>
-    </div>
-    <hr style="border:none;border-top:1px solid var(--line-soft);margin:16px 0">
-    <div class="field">
-      <label>Datensicherung</label>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn small" id="mBackupExport">Backup mit Namen</button>
-        <button class="btn small" id="mBackupPseudo">Backup pseudonym</button>
-        <button class="btn small" id="mBackupImport">Backup einlesen</button>
-        <input type="file" id="mBackupFile" accept="application/json,.json" hidden>
-      </div>
-      <div class="hint">${m.lastBackup ? 'Letztes Backup: '+fmtDateLong(m.lastBackup) : 'Noch kein Backup erstellt.'} Daten liegen nur in diesem Browser — regelmäßig sichern.</div>
-      <div class="hint"><b>Pseudonym:</b> Schülernamen werden durch Nummern ersetzt (alphabetisch nach Nachname, je Kurs) — zum Teilen/Ablegen ohne Namen. Freitext in Notizen, Todos und Terminen wird dabei <b>nicht</b> anonymisiert; zählt nicht als Namens-Sicherung.</div>
-    </div>
-    <hr style="border:none;border-top:1px solid var(--line-soft);margin:16px 0">
-    <div class="field"><button class="btn danger small" id="mReset">Alle Daten zurücksetzen</button>
-      <div class="hint">Löscht sämtliche Kurse, Schüler:innen und Noten aus diesem Browser.</div></div>
-  `, [
-    { label: 'Abbrechen', onClick: closeModal },
-    { label: 'Speichern', cls: 'primary', onClick: () => {
-      m.ferienDatum = val('mFerienDate'); m.ferienLabel = val('mFerienLabel').trim() || 'Ferien'; m.zeugnisDatum = val('mZeugnis');
-      m.tableLayout = val('mLayout') || 'standard';
-      m.halfYear = val('mHalfYear') || 'auto';
-      const wantAB = val('mAB') === '1';
-      data.timetable.abWeeks = wantAB;
-      if (wantAB) abSetCurrentWeek(Number(val('mABWeek')) || 1);
-      planWeek = null;
-      save(); closeModal(); render();
-    }},
-  ]);
-  const abSel = document.getElementById('mAB'), abWrap = document.getElementById('mABWeekWrap');
-  abSel.onchange = () => { abWrap.style.display = abSel.value === '1' ? '' : 'none'; };
+  `;
+
+  /* jede Änderung sofort sichern */
+  const saved = () => { save(); toast('Gespeichert.'); };
+  document.getElementById('mFerienDate').onchange = e => { m.ferienDatum = e.target.value; saved(); };
+  document.getElementById('mFerienLabel').onchange = e => { m.ferienLabel = e.target.value.trim() || 'Ferien'; saved(); };
+  document.getElementById('mZeugnis').onchange = e => { m.zeugnisDatum = e.target.value; saved(); };
+  document.getElementById('mHalfYear').onchange = e => { m.halfYear = e.target.value || 'auto'; saved(); };
+  document.getElementById('mLayout').onchange = e => { m.tableLayout = e.target.value || 'standard'; saved(); };
+
+  const abSel = document.getElementById('mAB'), abWrap = document.getElementById('mABWeekWrap'), abWeek = document.getElementById('mABWeek');
+  const applyAB = () => {
+    const wantAB = abSel.value === '1';
+    abWrap.style.display = wantAB ? '' : 'none';
+    data.timetable.abWeeks = wantAB;
+    if (wantAB) abSetCurrentWeek(Number(abWeek.value) || 1);
+    planWeek = null;                       // Stundenplan wieder auf die laufende Woche
+    saved();
+  };
+  abSel.onchange = applyAB;
+  abWeek.onchange = applyAB;
+
+  document.getElementById('mLog').onclick = () => openHistory(null);
   document.getElementById('mBackupExport').onclick = exportBackup;
   document.getElementById('mBackupPseudo').onclick = exportBackupPseudonym;
   const fileInput = document.getElementById('mBackupFile');
@@ -3242,7 +3504,7 @@ function openMetaSettings() {
   fileInput.onchange = () => { if (fileInput.files[0]) importBackupFile(fileInput.files[0]); };
   document.getElementById('mReset').onclick = () => {
     if (!confirm('Wirklich ALLE Daten löschen?')) return;
-    localStorage.removeItem(STORE_KEY); data = DEFAULT_DATA(); save(); closeModal(); go({ name: 'home' });
+    localStorage.removeItem(STORE_KEY); data = DEFAULT_DATA(); save(); go({ name: 'home' });
   };
 }
 

@@ -3,7 +3,7 @@
    Bei Änderungen am App-Shell die CACHE-Version erhöhen. */
 'use strict';
 
-const CACHE = 'pult-v3';
+const CACHE = 'pult-v4';
 const ASSETS = [
   './',
   './index.html',
