@@ -1218,6 +1218,13 @@ function renderHome() {
     const cells = [1, 2, 3, 4, 5].map(day => {
       const isToday = day === wdToday;
       const l = lessonAt(day, pi, week);
+      if (l && l.placeholder) {
+        const label = esc(l.label || 'Freitext');
+        const mark = ab && (l.week || 0) ? `<span class="tt-ab">${AB_LABEL[l.week]}</span>` : '';
+        return `<td class="tt-cell ${isToday ? 'tt-today' : ''}">
+          <button class="tt-lesson tt-placeholder" data-day="${day}" data-period="${pi}" ${planEdit ? '' : 'disabled'}>
+            ${mark}<span class="tt-subject">${label}</span><span class="tt-meta">${esc(l.room || '')}</span></button></td>`;
+      }
       if (l) {
         const c = getCourse(l.courseId);
         const col = courseColor(l.courseId);
@@ -1317,7 +1324,8 @@ function openLessonEditor(day, period, week) {
   const p = data.timetable.periods[period];
   /* Vorgabe für den Rhythmus: bestehende Stunde behält ihren, neue gilt für die gezeigte Woche */
   const curRhythm = existing ? (existing.week || 0) : (week || 0);
-  const opts = `<option value="">— frei —</option>` + data.courses.map(c =>
+  const isPlaceholder = !!(existing && existing.placeholder);
+  const opts = `<option value="">— frei —</option><option value="__PLATZHALTER__" ${isPlaceholder ? 'selected' : ''}>Freitext</option>` + data.courses.map(c =>
     `<option value="${c.id}" ${existing && existing.courseId === c.id ? 'selected' : ''}>${esc(c.subject)} · ${esc(c.className)}</option>`).join('');
   const rhythmField = ab ? `
     <div class="field"><label>Rhythmus</label>
@@ -1329,8 +1337,13 @@ function openLessonEditor(day, period, week) {
       <div class="hint">„Jede Woche" gilt in A und B. Sollen in diesem Feld zwei verschiedene Kurse liegen, setze diese Stunde auf eine Woche — das Feld der anderen wird dann frei.</div>
     </div>` : '';
   modal(`${WEEKDAYS_LONG[day]} · ${p ? esc(p.label) + ' Stunde' : period + 1 + '. Stunde'}${ab ? ' · Woche ' + AB_LABEL[week] : ''}`, `
-    ${data.courses.length ? '' : '<div class="notice">Noch keine Kurse vorhanden — lege zuerst einen Kurs an.</div>'}
+    ${data.courses.length ? '' : '<div class="notice">Noch keine Kurse vorhanden — lege zuerst einen Kurs an, oder trage einen Freitext ein.</div>'}
     <div class="field"><label>Kurs</label><select id="leCourse">${opts}</select></div>
+    <div class="field" id="lePlaceholderField" style="${isPlaceholder ? '' : 'display:none'}">
+      <label>Bezeichnung</label>
+      <input id="lePlaceholderLabel" type="text" value="${esc(isPlaceholder ? existing.label || '' : '')}" placeholder="z. B. Pause, Vertretung, frei">
+      <div class="hint">Freier Text statt eines Kurses. Das Feld ist im Stundenplan nicht anklickbar.</div>
+    </div>
     <div class="field"><label>Raum (optional)</label><input id="leRoom" type="text" value="${esc(existing ? existing.room || '' : '')}" placeholder="z. B. A103"></div>
     ${rhythmField}
   `, [
@@ -1340,15 +1353,23 @@ function openLessonEditor(day, period, week) {
     }}] : []),
     { label: 'Abbrechen', onClick: closeModal },
     { label: 'Speichern', cls: 'primary', onClick: () => {
-      const courseId = val('leCourse'), room = val('leRoom').trim();
+      const sel = val('leCourse'), room = val('leRoom').trim();
       const w = ab ? (Number(val('leWeek')) || 0) : 0;
-      if (!courseId) {
+      if (sel === '__PLATZHALTER__') {
+        const label = val('lePlaceholderLabel').trim();
+        if (existing) { existing.courseId = null; existing.placeholder = true; existing.label = label; existing.room = room; existing.week = w; }
+        else data.timetable.lessons.push({ id: uid(), day, period, courseId: null, placeholder: true, label, room, week: w });
+      } else if (!sel) {
         if (existing) data.timetable.lessons = data.timetable.lessons.filter(l => l !== existing);
-      } else if (existing) { existing.courseId = courseId; existing.room = room; existing.week = w; }
-      else data.timetable.lessons.push({ id: uid(), day, period, courseId, room, week: w });
+      } else if (existing) { existing.courseId = sel; existing.placeholder = false; existing.label = ''; existing.room = room; existing.week = w; }
+      else data.timetable.lessons.push({ id: uid(), day, period, courseId: sel, room, week: w });
       save(); closeModal(); renderHome();
     }},
   ]);
+  const leCourseEl = document.getElementById('leCourse');
+  if (leCourseEl) leCourseEl.onchange = () => {
+    document.getElementById('lePlaceholderField').style.display = leCourseEl.value === '__PLATZHALTER__' ? '' : 'none';
+  };
 }
 
 function openPeriodsEditor() {
