@@ -421,6 +421,10 @@ input[type=range] { width: 100%; min-width: 0; }
 
 .pill { font-size: 12px; font-weight: 700; padding: 3px 9px; border-radius: var(--radius); background: var(--accent-soft); color: var(--accent-ink); }
 
+/* Kennzeichnung einer Spalte mit Bewertungsbogen — in der Farbe ihres Bereichs */
+.ka-pill { font-size: 9px; padding: 1px 5px; vertical-align: middle; }
+.ka-pill[data-kind="test"] { background: #f3f0fb; color: #4a3d73; }
+
 .legend { display:flex; flex-wrap: wrap; gap: 10px 16px; margin-top: 14px; font-size: 12px; color: var(--ink-soft); }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
 .legend i { width: 14px; height: 14px; border: 1px solid rgba(0,0,0,.1); display:inline-block; border-radius: 1px; }

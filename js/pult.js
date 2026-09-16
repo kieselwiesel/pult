@@ -1601,8 +1601,9 @@ function renderCourse() {
       </div>
       <div class="spacer"></div>
       <button class="btn small" id="btnAddSchrift">+ Schriftlich</button>
-      <button class="btn small" id="btnAddKA">+ KA</button>
+      <button class="btn small" id="btnAddKA" title="Klassenarbeit — Aufgaben und Bewertungsbogen, zählt schriftlich">+ KA</button>
       <button class="btn small" id="btnAddMuend">+ Mündlich</button>
+      <button class="btn small" id="btnAddTest" title="Test — wie eine Klassenarbeit, zählt aber mündlich">+ Test</button>
       <button class="btn small primary" id="btnDurch">Durchtippen</button>
       <button class="btn small" id="btnSonstige">Sonstige (${hy.sonstige.length})</button>
     </div>
@@ -1627,8 +1628,9 @@ function renderCourse() {
   document.getElementById('btnZwischen').onclick = () => createZwischenstand(c);
   document.getElementById('btnMore').onclick = () => openMoreMenu(c);
   document.getElementById('btnAddSchrift').onclick = () => openColumnForm(c, 'schriftlich');
-  document.getElementById('btnAddKA').onclick = () => createKA(c);
+  document.getElementById('btnAddKA').onclick = () => createKA(c, 'schriftlich');
   document.getElementById('btnAddMuend').onclick = () => openColumnForm(c, 'muendlich');
+  document.getElementById('btnAddTest').onclick = () => createKA(c, 'muendlich');
   document.getElementById('btnDurch').onclick = () => startDurchtippen(c);
   document.getElementById('btnSonstige').onclick = () => openSonstige(c);
 
@@ -1711,7 +1713,7 @@ function renderStudent() {
     const share = p ? ` <span class="cs-sub">· ${fmtNum(p.pct)} %${p.fixed ? ' fest' : ''}</span>`
       : (colWeighted(col) ? ` <span class="cs-sub">· ${weightLabel(col)}</span>` : '');
     return `<div class="cs-line sd-grade" data-col="${col.id}" data-hy="${hyKey}">
-      <span>${esc(col.label)}${col.ka?' <span class="pill" style="font-size:9px;padding:0 5px">KA</span>':''}${col.date?` <span class="cs-sub">${fmtDate(col.date)}</span>`:''}${share}</span>
+      <span>${esc(col.label)}${kaPill(col)}${col.date?` <span class="cs-sub">${fmtDate(col.date)}</span>`:''}${share}</span>
       <span class="cs-vals">${valChip(v, false)}</span></div>`;
   };
   const sonstRow = (so) => {
@@ -1814,10 +1816,24 @@ function renderStudent() {
 /* ============================================================
    Klassenarbeit — eigene Seite (Eingabe / Bewertung / Statistik)
    ============================================================ */
-function createKA(c) {
+/* Klassenarbeit und Test teilen dieselbe Maschinerie (Aufgaben, Bewertungsbogen,
+   Statistik). Unterschied ist allein der Bereich: die Klassenarbeit zählt
+   schriftlich, der Test mündlich. `kaKind` liefert daraus die Beschriftungen. */
+function kaKind(col) {
+  return col && col.type === 'muendlich'
+    ? { key: 'test', name: 'Test', pill: 'Test' }
+    : { key: 'ka', name: 'Klassenarbeit', pill: 'KA' };
+}
+function kaPill(col) {
+  if (!col || !col.ka) return '';
+  const k = kaKind(col);
+  return ` <span class="pill ka-pill" data-kind="${k.key}">${k.pill}</span>`;
+}
+function createKA(c, type) {
   const hy = c.halfYears[route.hy];
+  type = type === 'muendlich' ? 'muendlich' : 'schriftlich';
   const col = {
-    id: uid(), type: 'schriftlich', label: 'Klassenarbeit', date: todayISO(),
+    id: uid(), type, label: type === 'muendlich' ? 'Test' : 'Klassenarbeit', date: todayISO(),
     ka: {
       tasks: [
         { id: uid(), label: 'Aufgabe 1', max: 10 },
@@ -1838,14 +1854,15 @@ function renderKA() {
   const col = findKaColumn(c);
   if (!col) return go({ name: 'course', courseId: c.id });
   const tab = route.kaTab || 'eingabe';
+  const kind = kaKind(col);
 
   app().innerHTML = `
     <div class="page-head">
       <div>
         <h1>${esc(col.label)}</h1>
-        <div class="sub">${esc(c.subject)} ${esc(c.className)} · ${route.hy}. Halbjahr${col.date?' · '+fmtDateLong(col.date):''}</div>
+        <div class="sub">${kind.name} · ${esc(c.subject)} ${esc(c.className)} · ${route.hy}. Halbjahr${col.date?' · '+fmtDateLong(col.date):''} · zählt ${col.type==='muendlich'?'mündlich':'schriftlich'}</div>
       </div>
-      <button class="btn small danger" id="kaDeleteTop">Klassenarbeit löschen</button>
+      <button class="btn small danger" id="kaDeleteTop">${kind.name} löschen</button>
     </div>
     <div class="tabs">
       <button class="tab ${tab==='eingabe'?'active':''}" data-t="eingabe">Punkteeingabe</button>
@@ -1870,8 +1887,9 @@ function renderKaEingabe(c, col) {
     return;
   }
   const maxTotal = col.ka.tasks.reduce((a, t) => a + (Number(t.max) || 0), 0);
+  const grp = col.type === 'muendlich' ? 'grp-muend' : 'grp-schrift';
   const head = col.ka.tasks.map(t =>
-    `<th class="ka-task grp-schrift">${esc(t.label)}<span class="ch-max">von ${t.max}</span></th>`).join('');
+    `<th class="ka-task ${grp}">${esc(t.label)}<span class="ch-max">von ${t.max}</span></th>`).join('');
 
   const rows = c.students.map(s => {
     const pts = (data.kaPoints[s.id] || {})[col.id] || {};
@@ -1889,10 +1907,10 @@ function renderKaEingabe(c, col) {
   }).join('');
 
   body.innerHTML = `
-    <div class="notice">Punkte pro Aufgabe eintragen. Note, Prozent und Summe berechnen sich automatisch und landen in der Notentabelle. Leere Zeile = nicht mitgeschrieben.</div>
+    <div class="notice">Punkte pro Aufgabe eintragen. Note, Prozent und Summe berechnen sich automatisch und landen als <b>${col.type==='muendlich'?'mündliche':'schriftliche'}</b> Note in der Notentabelle. Leere Zeile = nicht mitgeschrieben.</div>
     <div class="table-wrap"><table class="grades">
       <thead><tr><th class="col-name">Schüler:in</th>${head}
-        <th class="grp-schrift">Summe</th><th class="grp-schrift">Prozent</th><th class="grp-final">Note</th></tr></thead>
+        <th class="${grp}">Summe</th><th class="${grp}">Prozent</th><th class="grp-final">Note</th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
   `;
@@ -1938,6 +1956,10 @@ function kaNoteCell(grade, scale) {
 function renderKaBewertung(c, col) {
   const body = document.getElementById('kaBody');
   const maxTotal = col.ka.tasks.reduce((a, t) => a + (Number(t.max) || 0), 0);
+  /* Gewichtung wie bei einer gewöhnlichen Notenspalte — über den Spaltenkopf
+     ist sie hier nicht erreichbar, weil der Klick direkt auf diese Seite führt. */
+  const fixedPct = colPct(col);
+  const wMode = fixedPct != null ? 'pct' : 'factor';
 
   const taskRows = col.ka.tasks.map(t => `
     <div class="task-edit" data-task="${t.id}">
@@ -1958,6 +1980,27 @@ function renderKaBewertung(c, col) {
       <div>
         <div class="field"><label>Bezeichnung</label><input type="text" id="kaLabel" value="${esc(col.label)}"></div>
         <div class="field"><label>Datum</label><input type="date" id="kaDate" value="${col.date||''}"></div>
+        <div class="field"><label>Zählt als</label>
+          <div class="seg" id="kaType" style="width:100%">
+            <button type="button" data-t="schriftlich" style="flex:1" class="${col.type!=='muendlich'?'active':''}">Schriftlich (Klassenarbeit)</button>
+            <button type="button" data-t="muendlich" style="flex:1" class="${col.type==='muendlich'?'active':''}">Mündlich (Test)</button>
+          </div>
+          <div class="hint">Bestimmt, in welchen Notenbereich das Ergebnis einfließt. Punkte und Bewertungsbogen bleiben erhalten.</div>
+        </div>
+        <div class="field"><label>Gewichtung</label>
+          <div class="seg" id="kaWMode" style="width:100%">
+            <button type="button" data-w="factor" style="flex:1" class="${wMode==='factor'?'active':''}">Zählt n-fach</button>
+            <button type="button" data-w="pct" style="flex:1" class="${wMode==='pct'?'active':''}">Fester Anteil</button>
+          </div>
+          <div id="kaWFactor" style="margin-top:8px;${wMode==='factor'?'':'display:none'}">
+            <input id="kaFactor" type="number" min="0.1" max="20" step="0.5" value="${fmtNum(colFactor(col)).replace(',', '.')}">
+            <div class="hint">Standard 1. Bei 2 wiegt dieses Ergebnis so viel wie zwei einfache Noten desselben Bereichs.</div>
+          </div>
+          <div id="kaWPct" style="margin-top:8px;${wMode==='pct'?'':'display:none'}">
+            <input id="kaPct" type="number" min="1" max="100" value="${fixedPct != null ? fmtNum(fixedPct).replace(',', '.') : ''}" placeholder="z. B. 10">
+            <div class="hint" id="kaPctHint"></div>
+          </div>
+        </div>
 
         <div class="calc-block">
           <h3>Aufgaben (Gesamt: ${fmtNum(maxTotal)} Punkte)</h3>
@@ -1976,7 +2019,7 @@ function renderKaBewertung(c, col) {
       </div>
     </div>
     <div class="toolbar" style="margin-top:16px">
-      <button class="btn danger" id="kaDelete">Klassenarbeit löschen</button>
+      <button class="btn danger" id="kaDelete">${kaKind(col).name} löschen</button>
       <div class="spacer"></div>
       <button class="btn primary" id="kaToEntry">Zur Punkteeingabe ›</button>
     </div>
@@ -1986,6 +2029,46 @@ function renderKaBewertung(c, col) {
 
   document.getElementById('kaLabel').oninput = e => { col.label = e.target.value; save(); };
   document.getElementById('kaDate').onchange = e => { col.date = e.target.value; save(); };
+  body.querySelectorAll('#kaType button').forEach(b => b.onclick = () => {
+    if (col.type === b.dataset.t) return;
+    col.type = b.dataset.t;
+    save(); renderKA();
+    toast(`Zählt jetzt ${col.type === 'muendlich' ? 'mündlich' : 'schriftlich'}.`);
+  });
+
+  /* Gewichtung — gespeichert wird nur, was vom Standard (einfach) abweicht. */
+  let wPick = wMode;
+  const pctHint = () => {
+    const el = document.getElementById('kaPctHint'); if (!el) return;
+    const b = col.type === 'schriftlich' ? c.weightWritten : c.weightOral;
+    const lbl = col.type === 'schriftlich' ? 'schriftlich' : 'mündlich';
+    const p = clamp(parseFloat(val('kaPct').replace(',', '.')) || 0, 0, 100);
+    const restText = p > 0 && p < b
+      ? ` Die übrigen ${lbl}en Noten teilen sich dann noch ${fmtNum(b - p)} %.`
+      : (p >= b ? ` Das ist bereits der ganze ${lbl}e Anteil — die übrigen ${lbl}en Noten zählen dann nicht mehr.` : '');
+    el.textContent = `Anteil an der Gesamtnote. ${lbl.charAt(0).toUpperCase() + lbl.slice(1)} zählt insgesamt ${fmtNum(b)} %.${restText}`;
+  };
+  const applyWeight = () => {
+    delete col.factor; delete col.pct;
+    if (wPick === 'pct') {
+      const p = clamp(parseFloat(val('kaPct').replace(',', '.')) || 0, 0, 100);
+      if (p > 0) col.pct = p;
+    } else {
+      const f = clamp(parseFloat(val('kaFactor').replace(',', '.')) || 1, 0.1, 20);
+      if (f !== 1) col.factor = f;
+    }
+    save();
+  };
+  body.querySelectorAll('#kaWMode button').forEach(b => b.onclick = () => {
+    wPick = b.dataset.w;
+    body.querySelectorAll('#kaWMode button').forEach(x => x.classList.toggle('active', x.dataset.w === wPick));
+    document.getElementById('kaWFactor').style.display = wPick === 'factor' ? '' : 'none';
+    document.getElementById('kaWPct').style.display = wPick === 'pct' ? '' : 'none';
+    applyWeight(); pctHint();
+  });
+  document.getElementById('kaFactor').oninput = applyWeight;
+  document.getElementById('kaPct').oninput = () => { applyWeight(); pctHint(); };
+  pctHint();
 
   // Aufgaben
   body.querySelectorAll('.task-edit').forEach(row => {
@@ -2021,7 +2104,8 @@ function renderKaBewertung(c, col) {
   document.getElementById('kaDelete').onclick = () => confirmDeleteKA(c, col);
 }
 function confirmDeleteKA(c, col) {
-  modal('Klassenarbeit löschen?', `<p>Die Klassenarbeit <b>${esc(col.label)}</b> inkl. aller eingetragenen Punkte wird gelöscht.</p>`, [
+  const kind = kaKind(col);
+  modal(`${kind.name} löschen?`, `<p>${kind.key === 'test' ? 'Der Test' : 'Die Klassenarbeit'} <b>${esc(col.label)}</b> inkl. aller eingetragenen Punkte wird gelöscht.</p>`, [
     { label: 'Abbrechen', onClick: closeModal },
     { label: 'Löschen', cls: 'danger', onClick: () => {
       const hy = c.halfYears[route.hy];
@@ -2032,7 +2116,7 @@ function confirmDeleteKA(c, col) {
       hy.columns = hy.columns.filter(x => x.id !== col.id);
       Object.values(data.grades).forEach(g => delete g[col.id]);
       Object.values(data.kaPoints).forEach(k => delete k[col.id]);
-      commitChange(`Klassenarbeit „${col.label}" gelöscht (${n} ${n === 1 ? 'Note' : 'Noten'})`, snap, { courseId: c.id });
+      commitChange(`${kind.name} „${col.label}" gelöscht (${n} ${n === 1 ? 'Note' : 'Noten'})`, snap, { courseId: c.id });
       save(); closeModal(); go({ name: 'course', courseId: c.id });
     }},
   ]);
@@ -2140,7 +2224,7 @@ function renderTable(c) {
 
   const headCols = (cols, grpClass) => cols.map(col => `
     <th class="colhead ${grpClass}" data-col="${col.id}">
-      <span class="ch-label">${esc(col.label)}${col.ka ? ' <span class="pill" style="font-size:9px;padding:1px 5px;vertical-align:middle">KA</span>' : ''}${weightPill(col)}</span>
+      <span class="ch-label">${esc(col.label)}${kaPill(col)}${weightPill(col)}</span>
       ${col.date ? `<span class="ch-date">${fmtDate(col.date)}</span>` : ''}
     </th>`).join('');
   const headSonst = list => list.map(so => `<th class="grp-sonst">${esc(so.label)}<span class="ch-date">${so.percent}%</span></th>`).join('');
