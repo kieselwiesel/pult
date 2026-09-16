@@ -27,6 +27,11 @@
   --shadow: 0 1px 0 rgba(28,33,40,.04), 0 1px 3px rgba(28,33,40,.06);
   --radius: 2px;
   --tap: 44px;
+
+  /* Höhe der fixierten Topbar (ohne Safe-Area) inkl. 3px Unterkante.
+     --topbar-total ist der Platz, den der Seiteninhalt oben freihalten muss. */
+  --topbar-h: 72px;
+  --topbar-total: calc(var(--topbar-h) + 3px + env(safe-area-inset-top));
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -36,10 +41,15 @@ html, body {
   height: 100%;
 }
 
+/* iOS/iPadOS färbt die Statusleiste im Standalone-Modus nach der Hintergrundfarbe
+   von <html>/<body> — nicht nach <meta name="theme-color">. Darum liegt hier das
+   Topbar-Grün; der helle Seitenhintergrund kommt aus #app. */
+html { background: var(--accent); }
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   color: var(--ink);
-  background: var(--paper);
+  background: var(--accent);
   font-size: 16px;
   line-height: 1.4;
   -webkit-font-smoothing: antialiased;
@@ -50,14 +60,14 @@ h1, h2, h3 { font-weight: 650; letter-spacing: -0.01em; margin: 0; }
 
 /* ---------- Topbar ---------- */
 .topbar {
-  position: sticky; top: 0; z-index: 40;
+  position: fixed; top: 0; left: 0; right: 0; z-index: 40;
   display: flex; align-items: stretch; gap: 10px;
-  height: 56px; padding: 0 16px;
+  padding: 0 16px;
   background: var(--accent);
   color: #eaf3f1;
-  border-bottom: 3px solid var(--accent-ink);
-  padding-top: env(safe-area-inset-top);
-  height: calc(56px + env(safe-area-inset-top));
+  /*border-bottom: 3px solid var(--accent-ink);*/
+  height: calc(var(--topbar-h) + env(safe-area-inset-top));
+  padding-top: calc(env(safe-area-inset-top) + 16px);
 }
 .brand { display: flex; align-items: center; flex: none; cursor: pointer; user-select: none; }
 .brand-mark { font-size: 22px; font-weight: 750; letter-spacing: -0.02em; color: #fff; }
@@ -91,8 +101,15 @@ h1, h2, h3 { font-weight: 650; letter-spacing: -0.01em; margin: 0; }
 
 /* ---------- Main ---------- */
 main {
+  background: var(--paper);
+  /* Streckt den hellen Hintergrund über die max-width hinaus bis zum Rand,
+     damit seitlich kein Grün durchscheint. */
+  box-shadow: 0 0 0 100vmax var(--paper);
+  clip-path: inset(0 -100vmax);
+  min-height: calc(100vh - var(--topbar-total));
   max-width: 1200px;
-  margin: 0 auto;
+  /* Die Topbar ist fixed und nimmt keinen Platz im Fluss ein — hier ausgleichen. */
+  margin: var(--topbar-total) auto 0;
   padding: 20px 16px 96px;
   padding-left: max(16px, env(safe-area-inset-left));
   padding-right: max(16px, env(safe-area-inset-right));
