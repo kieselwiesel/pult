@@ -486,6 +486,53 @@ input[type=range] { width: 100%; min-width: 0; }
 /* Toast */
 .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 12px 18px; border-radius: var(--radius); font-size: 14px; font-weight: 600; z-index: 200; box-shadow: 0 6px 20px rgba(0,0,0,.3); animation: pop .12s; }
 
+/* ---------- App-Sperre ---------- */
+.topbar-lock svg { display: block; }
+.set-buttons .btn svg { flex: none; }
+
+/* Liegt über allem (auch über offenen Fenstern und Toasts) und ist deckend,
+   damit auch das Vorschaubild im App-Umschalter nichts zeigt. */
+.lockscreen {
+  position: fixed; inset: 0; z-index: 300;
+  background: var(--accent); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  padding: calc(env(safe-area-inset-top) + 16px) 16px calc(env(safe-area-inset-bottom) + 16px);
+  overflow-y: auto; user-select: none; -webkit-user-select: none;
+}
+.ls-inner { width: 100%; max-width: 320px; display: flex; flex-direction: column; align-items: center; margin: auto; }
+.ls-brand { font-size: 30px; font-weight: 750; letter-spacing: -0.02em; margin-bottom: 28px; }
+.ls-brand .dot { color: #7fd0c2; }
+.ls-title { font-size: 17px; font-weight: 600; color: #eaf3f1; text-align: center; }
+.ls-dots { display: flex; gap: 18px; margin: 20px 0 10px; }
+.ls-dots i { width: 14px; height: 14px; border: 2px solid #eaf3f1; border-radius: 50%; transition: background .08s; }
+.ls-dots i.on { background: #fff; border-color: #fff; }
+.ls-dots.shake { animation: ls-shake .35s; }
+@keyframes ls-shake { 20%, 60% { transform: translateX(-8px); } 40%, 80% { transform: translateX(8px); } }
+.ls-msg { min-height: 20px; font-size: 14px; font-weight: 600; color: #ffd9a8; text-align: center; margin-bottom: 16px; }
+.ls-pad { display: grid; grid-template-columns: repeat(3, 76px); gap: 12px 18px; }
+.ls-key {
+  appearance: none; font: inherit; cursor: pointer;
+  width: 76px; height: 64px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid rgba(255,255,255,.3); border-radius: var(--radius);
+  background: rgba(255,255,255,.08); color: #fff;
+  font-size: 28px; font-weight: 500;
+  transition: background .08s;
+}
+.ls-key:active { background: rgba(255,255,255,.3); }
+.ls-key:disabled { opacity: .35; cursor: default; }
+.ls-fn { border-color: transparent; background: transparent; }
+.ls-link {
+  appearance: none; border: none; background: none; cursor: pointer;
+  font: inherit; font-size: 14px; color: #cfe6e1;
+  min-height: var(--tap); margin-top: 18px; padding: 0 12px;
+  text-decoration: underline; text-underline-offset: 3px;
+}
+@media (max-height: 560px) {
+  .ls-brand { margin-bottom: 12px; font-size: 24px; }
+  .ls-key { height: 52px; }
+}
+
 /* ============================================================
    Phase 6 — Stundenplan, Todos, Termine
    ============================================================ */
