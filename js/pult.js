@@ -3966,19 +3966,28 @@ function bindLockSettings() {
   const bioSel = $('lkBio'), bioHint = $('lkBioHint');
   bioAvailable().then(ok => {
     if (!bioSel.isConnected) return;
-    if (!ok) {
-      bioHint.textContent = bioSupported()
-        ? `Auf diesem Gerät ist keine ${bioName()} eingerichtet.`
-        : 'Nur verfügbar, wenn Pult. über https geöffnet wird (oder über localhost).';
+    if (!bioSupported()) {
+      bioHint.textContent = window.isSecureContext
+        ? 'Dieser Browser unterstützt keine Passkeys (WebAuthn).'
+        : `Nur verfügbar, wenn Pult. über https geöffnet wird (oder über localhost) — gerade: ${location.protocol}//${location.host}`;
       return;
     }
+    /* Auch wenn das Gerät „nicht verfügbar" meldet, darf man es versuchen:
+       Verwaltete Geräte melden das teils, obwohl Touch ID eingerichtet ist —
+       der Fehler beim Einrichten sagt dann mehr. */
     bioSel.disabled = false;
-    bioHint.textContent = 'Beim Entsperren erscheint die Abfrage automatisch; das Symbol links neben der 0 startet sie erneut.';
+    bioHint.textContent = ok
+      ? 'Beim Entsperren erscheint die Abfrage automatisch; das Symbol links neben der 0 startet sie erneut.'
+      : `Das Gerät meldet keine Entsperrung für Websites. Häufige Ursachen: kein Gerätecode, iCloud-Schlüsselbund aus oder auf verwalteten Geräten per Profil gesperrt. Einrichten kann trotzdem versucht werden.`;
   });
   bioSel.onchange = async () => {
     if (bioSel.value === '0') { lockCfg.credId = ''; saveLock(); toast('Gespeichert.'); return; }
     try { await bioRegister(); toast(`${bioName()} eingerichtet.`); }
-    catch (e) { bioSel.value = '0'; toast(`${bioName()} konnte nicht eingerichtet werden.`); }
+    catch (e) {
+      bioSel.value = '0';
+      toast(`${bioName()} konnte nicht eingerichtet werden.`);
+      bioHint.textContent = `Einrichten fehlgeschlagen: ${e.name || 'Fehler'}${e.message ? ' — ' + e.message : ''}`;
+    }
   };
 }
 
