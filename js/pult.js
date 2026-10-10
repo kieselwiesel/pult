@@ -37,6 +37,7 @@ const DEFAULT_DATA = () => ({
   todos: [],           // { id, text, done, created, due, courseId|null }
   termine: [],         // { id, title, date, start, end, allDay, location, note, courseId|null, uid }
   history: [],         // Notenprotokoll, siehe unten — { id, at, label, courseId, changes[], undone }
+  rubrics: [],         // Bewertungsraster-Vorlagen, siehe raster.js
 });
 
 /* Standard-Stundenraster (editierbar unter „Zeiten") */
@@ -480,7 +481,8 @@ function weightPill(col, style) {
 /* benotete Leistungen eines Bereichs als [{ col, v }] */
 function blockEntries(cols, sId) {
   const gr = data.grades[sId] || {};
-  return cols.map(col => ({ col, v: gr[col.id] })).filter(e => e.v != null && !isNaN(e.v));
+  return cols.filter(col => !col.noCount)   // reine Rückmeldung (Raster „zählt nicht")
+    .map(col => ({ col, v: gr[col.id] })).filter(e => e.v != null && !isNaN(e.v));
 }
 /* Gewichteter Schnitt eines Bereichs.
    blockPct = Anteil des Bereichs an der Gesamtnote (z. B. 60 % mündlich).
@@ -799,10 +801,11 @@ let route = { name: 'home', courseId: null, hy: '1', view: 'simpel' };
 let navStack = [];
 function samePage(a, b) {
   return a.name === b.name && a.courseId === b.courseId &&
-         a.studentId === b.studentId && a.columnId === b.columnId;
+         a.studentId === b.studentId && a.columnId === b.columnId && a.rasterId === b.rasterId;
 }
 function go(r) {
   closeModal();                     // ein Seitenwechsel lässt kein Fenster offen stehen
+  closePrintView();
   const next = Object.assign({}, route, r);
   if (!samePage(next, route)) {
     navStack.push(route);
@@ -1027,6 +1030,10 @@ function pseudonymizeData(d) {
       (a.firstName || '').localeCompare(b.firstName || '', 'de'));
     /* Kurzinfos (z. B. Nachteilsausgleich) sind personenbezogen und fliegen mit raus */
     ordered.forEach((s, i) => { s.firstName = String(i + 1).padStart(2, '0'); s.lastName = ''; s.info = ''; });
+    /* Rückmeldungen in Raster-Einschätzungen ebenso */
+    ['1', '2'].forEach(h => ((c.halfYears || {})[h] || { columns: [] }).columns.forEach(col => {
+      if (col.raster) Object.values(col.raster.ratings || {}).forEach(r => { r.comment = ''; });
+    }));
   });
   /* Im Notenprotokoll stehen Klarnamen in den Beschriftungen — fliegt komplett raus */
   d.history = [];
@@ -1071,6 +1078,9 @@ function render() {
   renderTopbarRight();
   renderBackFab();
   if (route.name === 'ka') return renderKA();
+  if (route.name === 'raster') return renderRaster();
+  if (route.name === 'rasterVorlagen') return renderRasterVorlagen();
+  if (route.name === 'rasterEdit') return renderRasterEdit();
   if (route.name === 'ha') return renderHaPage();
   if (route.name === 'seating') return renderSeating();
   if (route.name === 'student') return renderStudent();
@@ -1090,7 +1100,9 @@ const TOP_PAGES = [
   { name: 'termine', label: 'Termine' },
 ];
 /* Unterseiten eines Kurses gehören navigatorisch zu „Kurse" */
-const COURSE_SUBPAGES = ['course', 'student', 'ka', 'ha', 'seating'];
+const COURSE_SUBPAGES = ['course', 'student', 'ka', 'ha', 'seating', 'raster'];
+/* Seiten, die zu den Einstellungen gehören */
+const SETTINGS_SUBPAGES = ['settings', 'rasterVorlagen', 'rasterEdit'];
 function navActive() { return COURSE_SUBPAGES.includes(route.name) ? 'courses' : route.name; }
 
 function renderTopNav() {
@@ -1106,7 +1118,7 @@ function renderTopNav() {
 function renderTopbarRight() {
   /* Zurück liegt unten links (backFab), oben rechts stehen die Einstellungen — auf jeder Seite. */
   const el = document.getElementById('topbarRight');
-  const active = route.name === 'settings' ? ' active' : '';
+  const active = SETTINGS_SUBPAGES.includes(route.name) ? ' active' : '';
   const lockBtn = lockCfg.enabled
     ? `<button class="icon-btn topbar-lock" id="btnLock" title="Jetzt sperren" aria-label="App sperren">${LOCK_SVG}</button>` : '';
   el.innerHTML = `${lockBtn}<button class="btn ghost small topbar-settings${active}" id="btnSettings">Einstellungen</button>`;
@@ -1603,10 +1615,7 @@ function renderCourse() {
         <button data-v="muendlich" class="${route.view==='muendlich'?'active':''}">Mündlich</button>
       </div>
       <div class="spacer"></div>
-      <button class="btn small" id="btnAddSchrift">+ Schriftlich</button>
-      <button class="btn small" id="btnAddKA" title="Klassenarbeit — Aufgaben und Bewertungsbogen, zählt schriftlich">+ KA</button>
-      <button class="btn small" id="btnAddMuend">+ Mündlich</button>
-      <button class="btn small" id="btnAddTest" title="Test — wie eine Klassenarbeit, zählt aber mündlich">+ Test</button>
+      <button class="btn small" id="btnAdd">+ Leistung</button>
       <button class="btn small primary" id="btnDurch">Durchtippen</button>
       <button class="btn small" id="btnSonstige">Sonstige (${hy.sonstige.length})</button>
     </div>
@@ -1630,10 +1639,7 @@ function renderCourse() {
   document.getElementById('btnSeating').onclick = () => { seatPending = null; go({ name: 'seating', courseId: c.id, seatMode: initialSeatMode(c) }); };
   document.getElementById('btnZwischen').onclick = () => createZwischenstand(c);
   document.getElementById('btnMore').onclick = () => openMoreMenu(c);
-  document.getElementById('btnAddSchrift').onclick = () => openColumnForm(c, 'schriftlich');
-  document.getElementById('btnAddKA').onclick = () => createKA(c, 'schriftlich');
-  document.getElementById('btnAddMuend').onclick = () => openColumnForm(c, 'muendlich');
-  document.getElementById('btnAddTest').onclick = () => createKA(c, 'muendlich');
+  document.getElementById('btnAdd').onclick = () => openAddMenu(c);
   document.getElementById('btnDurch').onclick = () => startDurchtippen(c);
   document.getElementById('btnSonstige').onclick = () => openSonstige(c);
 
@@ -1716,7 +1722,7 @@ function renderStudent() {
     const share = p ? ` <span class="cs-sub">· ${fmtNum(p.pct)} %${p.fixed ? ' fest' : ''}</span>`
       : (colWeighted(col) ? ` <span class="cs-sub">· ${weightLabel(col)}</span>` : '');
     return `<div class="cs-line sd-grade" data-col="${col.id}" data-hy="${hyKey}">
-      <span>${esc(col.label)}${kaPill(col)}${col.date?` <span class="cs-sub">${fmtDate(col.date)}</span>`:''}${share}</span>
+      <span>${esc(col.label)}${kaPill(col)}${rasterPill(col)}${col.date?` <span class="cs-sub">${fmtDate(col.date)}</span>`:''}${share}</span>
       <span class="cs-vals">${valChip(v, false)}</span></div>`;
   };
   const sonstRow = (so) => {
@@ -1796,7 +1802,8 @@ function renderStudent() {
   document.getElementById('sdNotes').onclick = () => openNotes(c, s.id);
   app().querySelectorAll('.sd-grade').forEach(row => row.onclick = () => {
     const col = c.halfYears[row.dataset.hy].columns.find(x => x.id === row.dataset.col);
-    if (col.ka) return go({ name: 'ka', courseId: c.id, columnId: col.id, kaTab: 'eingabe' });
+    if (col.ka) return go({ name: 'ka', courseId: c.id, hy: row.dataset.hy, columnId: col.id, kaTab: 'eingabe' });
+    if (col.raster) return openRasterCol(c, col, s.id);
     const cur = (data.grades[s.id] || {})[col.id];
     openPad(`${esc(s.firstName)} — ${esc(col.label)}`, cur, v => {
       setGradeLogged(c, 'grades', s.id, col.id, v, col.label);
@@ -2227,7 +2234,7 @@ function renderTable(c) {
 
   const headCols = (cols, grpClass) => cols.map(col => `
     <th class="colhead ${grpClass}" data-col="${col.id}">
-      <span class="ch-label">${esc(col.label)}${kaPill(col)}${weightPill(col)}</span>
+      <span class="ch-label">${esc(col.label)}${kaPill(col)}${rasterPill(col)}${weightPill(col)}</span>
       ${col.date ? `<span class="ch-date">${fmtDate(col.date)}</span>` : ''}
     </th>`).join('');
   const headSonst = list => list.map(so => `<th class="grp-sonst">${esc(so.label)}<span class="ch-date">${so.percent}%</span></th>`).join('');
@@ -2385,6 +2392,7 @@ function renderTable(c) {
     th.onclick = () => {
       const col = hy.columns.find(x => x.id === th.dataset.col);
       if (col && col.ka) go({ name: 'ka', courseId: c.id, columnId: col.id, kaTab: 'eingabe' });
+      else if (col && col.raster) openRasterCol(c, col);
       else openColumnMenu(c, th.dataset.col);
     });
   host.querySelectorAll('td.final').forEach(td =>
@@ -2427,6 +2435,7 @@ function openGradeCell(c, sId, colId) {
   const s = c.students.find(x => x.id === sId);
   const col = c.halfYears[route.hy].columns.find(x => x.id === colId);
   if (col && col.ka) return go({ name: 'ka', courseId: c.id, columnId: col.id, kaTab: 'eingabe' });
+  if (col && col.raster) return openRasterCol(c, col, sId);
   const cur = (data.grades[sId] || {})[colId];
   openPad(`${esc(s.firstName)} ${esc(s.lastName||'')} — ${esc(col.label)}`, cur, v => {
     setGradeLogged(c, 'grades', sId, colId, v, col.label);
@@ -2794,7 +2803,7 @@ function renderSeating() {
   const st = ensureSeating(c);
   const mode = SEAT_MODES.includes(route.seatMode) ? route.seatMode : initialSeatMode(c);
   const hy = c.halfYears[route.hy];
-  const muendCols = hy.columns.filter(x => x.type === 'muendlich');
+  const muendCols = hy.columns.filter(x => x.type === 'muendlich' && !x.raster);   // Raster-Noten entstehen im Raster
   const noteCol = muendCols.find(x => x.id === route.seatCol) || muendCols[muendCols.length - 1] || null;
   const sessions = (c.haLog || []).slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
   const sess = sessions.find(x => x.id === route.seatSess) || sessions[0] || null;
@@ -2901,7 +2910,7 @@ function renderSeating() {
   if (colSel) colSel.onchange = () => go({ seatCol: colSel.value });
   const newCol = document.getElementById('spNewCol');
   if (newCol) newCol.onclick = () => {
-    let col = hy.columns.find(x => x.type === 'muendlich' && x.label === 'Mitarbeit' && x.date === todayISO());
+    let col = hy.columns.find(x => x.type === 'muendlich' && x.label === 'Mitarbeit' && x.date === todayISO() && !x.ka && !x.raster);
     if (!col) { col = { id: uid(), type: 'muendlich', label: 'Mitarbeit', date: todayISO() }; hy.columns.push(col); save(); }
     go({ seatCol: col.id });
   };
@@ -3037,7 +3046,7 @@ function seatingAutoFill(c) {
 /* Klasse durchtippen (mündliche Mitarbeit, heute) */
 function startDurchtippen(c) {
   const hy = c.halfYears[route.hy];
-  let col = hy.columns.find(x => x.type === 'muendlich' && x.label === 'Mitarbeit' && x.date === todayISO());
+  let col = hy.columns.find(x => x.type === 'muendlich' && x.label === 'Mitarbeit' && x.date === todayISO() && !x.ka && !x.raster);
   if (!col) { col = { id: uid(), type: 'muendlich', label: 'Mitarbeit', date: todayISO() }; hy.columns.push(col); save(); }
   openDurchtippen(c, col.id, 0);
 }
@@ -3105,6 +3114,23 @@ function openDurchtippen(c, colId, idx) {
     if (b.dataset.p !== 'skip') setGradeLogged(c, 'grades', s.id, colId, parseInt(b.dataset.p), col.label);
     openDurchtippen(c, colId, idx + 1);
   });
+}
+
+/* „+ Leistung": alle Arten, eine Note anzulegen */
+function openAddMenu(c) {
+  const item = (id, title, sub) => `<button class="btn menu-btn" id="${id}">${title}<small>${sub}</small></button>`;
+  modal('Leistung hinzufügen', `<div class="chip-list">
+    ${item('amMuend', 'Mündliche Note', 'Einzelne Note, z. B. Mitarbeit, Referat')}
+    ${item('amSchrift', 'Schriftliche Note', 'Einzelne Note ohne Aufgaben')}
+    ${item('amKA', 'Klassenarbeit', 'Aufgaben, Punkte und Bewertungsbogen · zählt schriftlich')}
+    ${item('amTest', 'Test', 'Wie eine Klassenarbeit, zählt aber mündlich')}
+    ${item('amRaster', 'Bewertungsraster', 'Einschätzung nach Kriterien, schlägt eine Note vor')}
+  </div>`, [{ label: 'Abbrechen', onClick: closeModal }]);
+  document.getElementById('amMuend').onclick = () => openColumnForm(c, 'muendlich');
+  document.getElementById('amSchrift').onclick = () => openColumnForm(c, 'schriftlich');
+  document.getElementById('amKA').onclick = () => { closeModal(); createKA(c, 'schriftlich'); };
+  document.getElementById('amTest').onclick = () => { closeModal(); createKA(c, 'muendlich'); };
+  document.getElementById('amRaster').onclick = () => createRasterRound(c);
 }
 
 /* Mehr-Menü */
@@ -3722,7 +3748,7 @@ async function bioVerify() {
    Der Bildschirm liegt über der App, statt sie zu ersetzen — ein offenes
    Fenster samt halb getipptem Text ist nach dem Entsperren noch da. */
 function setAppInert(on) {
-  ['app', 'modalBackdrop', 'backFab'].forEach(id => { const n = document.getElementById(id); if (n) n.inert = on; });
+  ['app', 'modalBackdrop', 'backFab', 'printView'].forEach(id => { const n = document.getElementById(id); if (n) n.inert = on; });
   document.querySelector('.topbar').inert = on;
 }
 function closePinScreen() { if (pinCleanup) { pinCleanup(); pinCleanup = null; } }
@@ -4057,6 +4083,14 @@ function renderSettings() {
         </div>
       </section>
 
+      <section class="set-card">
+        <h2>Bewertungsraster</h2>
+        <div class="field">
+          <button class="btn" id="mRaster">Vorlagen verwalten</button>
+          <div class="hint">${(data.rubrics || []).length} ${(data.rubrics || []).length === 1 ? 'Vorlage' : 'Vorlagen'} — Kriterien, Stufen und Gewichtung für Einschätzungen, z. B. der Mitarbeit.</div>
+        </div>
+      </section>
+
 ${lockSettingsHtml()}
 
       <section class="set-card">
@@ -4113,6 +4147,7 @@ ${lockSettingsHtml()}
 
   bindLockSettings();
   document.getElementById('mLog').onclick = () => openHistory(null);
+  document.getElementById('mRaster').onclick = () => go({ name: 'rasterVorlagen' });
   document.getElementById('mBackupExport').onclick = exportBackup;
   document.getElementById('mBackupPseudo').onclick = exportBackupPseudonym;
   const fileInput = document.getElementById('mBackupFile');
@@ -4143,5 +4178,6 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal()
 /* ---------- Start ---------- */
 data = load();
 migrateHaLog();
+migrateRaster();
 render();
 initLock();
