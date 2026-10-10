@@ -320,6 +320,7 @@ function buildCourse(d, cfg) {
 
 function seed() {
   const d = DEFAULT_DATA();
+  d.meta.demo = true;   // fiktive Daten — Hinweis und „Beispieldaten löschen" (willkommen.js)
   d.meta.ferienDatum = '2026-07-30';
   d.meta.ferienLabel = 'Sommerferien';
   d.meta.zeugnisDatum = '2026-07-13';
@@ -3591,7 +3592,8 @@ catch (e) {
 }
 initLock();
 /* installierte Web-App: Speicher als dauerhaft anfragen (sonst darf der Browser bei Platzmangel räumen) */
-if (window.matchMedia('(display-mode: standalone)').matches || navigator.standalone) storagePersist(true);
+if (isStandalone()) storagePersist(true);
+maybeShowWelcome();
 dailySnapshot();
 loadAppVersion().then(() => {
   if (SETTINGS_SUBPAGES.includes(route.name)) render();

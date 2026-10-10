@@ -18,7 +18,7 @@ const SET_PAGES = [
   { key: 'raster',      title: 'Bewertungsraster', sub: 'Vorlagen für Einschätzungen' },
   { key: 'sicherheit',  title: 'Sicherheit',       sub: 'App-Sperre' },
   { key: 'daten',       title: 'Daten',            sub: 'Backup, Sicherungsstände, Speicher' },
-  { key: 'ueber',       title: 'Über Pult.',       sub: 'Version und Updates' },
+  { key: 'ueber',       title: 'Über Pult.',       sub: 'Version, Updates, Datenschutz' },
 ];
 
 /* Vorgaben für neue Kurse */
@@ -192,7 +192,15 @@ function setSicherheit(body) {
 function setDaten(body) {
   const m = data.meta;
   const usage = (localStorage.getItem(STORE_KEY) || '').length;
-  body.innerHTML = `
+  const demo = m.demo ? `
+    <section class="set-card">
+      <h2>Beispieldaten</h2>
+      <div class="field">
+        <button class="btn" id="mDemoClear">Beispieldaten löschen …</button>
+        <div class="hint">Die Kurse, Noten und Termine beim ersten Start sind fiktiv. Einstellungen und Bewertungsraster-Vorlagen bleiben beim Löschen erhalten.</div>
+      </div>
+    </section>` : '';
+  body.innerHTML = demo + `
     <section class="set-card">
       <h2>Backup als Datei</h2>
       <div class="field">
@@ -261,6 +269,7 @@ function setDaten(body) {
   document.getElementById('mRemind').onchange = e => { data.meta.backupRemind = Number(e.target.value); setSaved(); };
   document.getElementById('mLog').onclick = () => openHistory(null);
   document.getElementById('mReset').onclick = confirmResetAll;
+  if (m.demo) document.getElementById('mDemoClear').onclick = confirmClearDemoData;
   document.getElementById('mYear').onclick = openYearChange;
 
   const snapHost = document.getElementById('snapList');
@@ -296,6 +305,11 @@ function setUeber(body) {
     <section class="set-card">
       <h2>Pult.</h2>
       <div class="hint" style="font-size:13px">Ein Lehreralltagshelfer für Noten, Stundenplan, Todos und Termine. Alle Daten bleiben auf diesem Gerät — es gibt keinen Server, der sie sieht.</div>
+      <div class="set-buttons" style="margin-top:12px">
+        <a class="btn" href="${LEGAL_URL}" target="_blank" rel="noopener">Datenschutz &amp; Impressum</a>
+        <button class="btn" id="mWelcome">Hinweise zur Installation</button>
+      </div>
     </section>`;
   bindUpdateSection();
+  document.getElementById('mWelcome').onclick = openWelcome;
 }

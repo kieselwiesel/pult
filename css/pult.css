@@ -655,6 +655,20 @@ td.tt-cell.tt-editable.tt-today { background: var(--today, #eef6f2); }
 }
 .info-i:hover { background: var(--accent); color: #fff; }
 .notice.info-note { border-style: solid; border-color: var(--accent); color: var(--ink); white-space: pre-wrap; }
+
+/* ---------- Willkommen (willkommen.js) ---------- */
+a.btn { text-decoration: none; }
+.notice.wl-warn { border-style: solid; border-color: var(--amber); color: var(--ink); }
+.notice.wl-ok { border-style: solid; border-color: var(--accent); color: var(--ink); }
+.wl-small { font-size: 13px; color: var(--ink-faint); margin-top: 8px; line-height: 1.45; }
+.wl-steps { border: 1px solid var(--line-soft); border-radius: var(--radius); padding: 10px 12px; margin-bottom: 8px; background: var(--card-2); }
+.wl-steps summary { font-weight: 700; cursor: pointer; }
+.wl-steps ol { margin: 8px 0 4px; padding-left: 22px; font-size: 14px; line-height: 1.5; }
+.wl-steps .btn { margin-top: 6px; }
+.wl-demo { margin-top: 14px; padding: 12px 14px; background: var(--accent-soft); border-left: 3px solid var(--accent); font-size: 14px; line-height: 1.45; }
+.wl-legal { margin-top: 14px; font-size: 13px; color: var(--ink-faint); }
+.wl-legal a { color: var(--accent); font-weight: 600; }
+html.is-dark .wl-legal a { color: var(--accent-ink); }
 .info-text { white-space: pre-wrap; font-size: 15px; }
 
 /* ---------- Sitzplan ---------- */
