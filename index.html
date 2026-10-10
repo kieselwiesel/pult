@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="description" content="Pult. — Lehrerhelfer: Notenverwaltung, Stundenplan, Todos und Termine. Läuft komplett lokal im Browser.">
   <meta name="theme-color" content="#16514b">
 
@@ -53,14 +53,22 @@
     </div>
   </div>
 
-  <!-- Reihenfolge: print.js und raster.js enthalten nur Definitionen, pult.js startet die App -->
+  <!-- Reihenfolge: die Dateien vor pult.js enthalten nur Definitionen, pult.js startet die App -->
   <script src="js/print.js"></script>
   <script src="js/raster.js"></script>
+  <script src="js/ausdrucke.js"></script>
+  <script src="js/werkzeuge.js"></script>
+  <script src="js/schueler.js"></script>
+  <script src="js/alltag.js"></script>
+  <script src="js/sperre.js"></script>
+  <script src="js/sicherung.js"></script>
+  <script src="js/einstellungen.js"></script>
+  <script src="js/update.js"></script>
   <script src="js/pult.js"></script>
   <script>
     /* Service Worker registrieren (nur über http/https, nicht bei file://) */
     if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
-      window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+      window.addEventListener('load', () => navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(() => {}));
     }
   </script>
 </body>

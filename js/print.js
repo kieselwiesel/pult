@@ -106,11 +106,11 @@ function openPrintView(opts) {
 function fitSheets(root, landscape, classes) {
   const p = pageMm(landscape);
   const limit = (p.h / p.w) * 0.985;           // kleiner Puffer für Abweichungen beim Druck
+  /* zu hoch — oder zu breit (Tabellen mit vielen Spalten laufen seitlich hinaus) */
+  const over = sheet => sheet.offsetHeight / sheet.offsetWidth > limit || sheet.scrollWidth > sheet.clientWidth + 2;
   root.querySelectorAll('.pp-sheet').forEach(sheet => {
     sheet.style.minHeight = '0';
-    for (let i = 0; i < classes.length && sheet.offsetHeight / sheet.offsetWidth > limit; i++) {
-      sheet.classList.add(classes[i]);
-    }
+    for (let i = 0; i < classes.length && over(sheet); i++) sheet.classList.add(classes[i]);
     sheet.style.minHeight = '';
   });
 }
@@ -132,20 +132,22 @@ ${PRINT_BASE_CSS}${printSheetCss(landscape)}${css || ''}
 }
 
 /* Datei weitergeben: auf iPad/Android über das Teilen-Menü (Dateien, AirDrop,
-   OneDrive …), sonst als Download. */
+   OneDrive …), sonst als Download. false = abgebrochen. */
 async function saveFile(blob, filename) {
   try {
     const file = new File([blob], filename, { type: blob.type });
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
       await navigator.share({ files: [file], title: filename });
-      return;
+      return true;
     }
   } catch (e) {
-    if (e && e.name === 'AbortError') return;   // Teilen abgebrochen
+    if (e && e.name === 'AbortError') return false;   // Teilen abgebrochen
+    /* sonst (z. B. Nutzergeste abgelaufen): auf Download ausweichen */
   }
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url; a.download = filename;
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return true;
 }

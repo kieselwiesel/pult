@@ -286,7 +286,7 @@ function createRasterRound(c) {
   if (!tpls.length) {
     modal('Bewertungsraster', `<div class="notice">Noch keine Raster-Vorlage vorhanden.</div>`, [
       { label: 'Abbrechen', onClick: closeModal },
-      { label: 'Vorlagen öffnen', cls: 'primary', onClick: () => go({ name: 'rasterVorlagen' }) },
+      { label: 'Vorlagen öffnen', cls: 'primary', onClick: () => go(RASTER_LIST) },
     ]);
     return;
   }
@@ -309,7 +309,7 @@ function createRasterRound(c) {
       <div class="hint">„Gar nicht" = nur Rückmeldung bzw. Zwischenstand, fließt nicht in die Note ein.</div>
     </div>
   `, [
-    { label: 'Vorlagen verwalten', onClick: () => go({ name: 'rasterVorlagen' }) },
+    { label: 'Vorlagen verwalten', onClick: () => go(RASTER_LIST) },
     { label: 'Abbrechen', onClick: closeModal },
     { label: 'Anlegen', cls: 'primary', onClick: () => {
       const tpl = tpls.find(t => t.id === val('rcTpl'));
@@ -658,7 +658,12 @@ function confirmDeleteRaster(c, col) {
 /* ============================================================
    Vorlagen verwalten
    ============================================================ */
-function renderRasterVorlagen() {
+/* Beide Ansichten zeichnen in den Inhaltsbereich der Einstellungen (#setBody) —
+   die Leiste mit den übrigen Bereichen bleibt dabei stehen. */
+const RASTER_LIST = { name: 'settings', setPage: 'raster', rasterId: null };
+function renderRasterVorlagen(host) {
+  host = host || document.getElementById('setBody');
+  if (!host) return go(RASTER_LIST);
   const list = data.rubrics || [];
   const missingEx = rasterExamples().filter(ex => !list.some(r => r.id === ex.id));
   const rows = list.map(t => {
@@ -676,11 +681,10 @@ function renderRasterVorlagen() {
     </div>`;
   }).join('') || `<div class="notice">Noch keine Vorlagen.</div>`;
 
-  app().innerHTML = `
-    <div class="page-head">
-      <div><h1>Bewertungsraster</h1>
-        <div class="sub">Vorlagen für Einschätzungen nach Kriterien. Im Kurs über <b>+ Leistung → Bewertungsraster</b> verwenden.</div></div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
+  host.innerHTML = `
+    <div class="set-toolbar">
+      <div class="hint">Vorlagen für Einschätzungen nach Kriterien. Im Kurs über <b>+ Leistung → Bewertungsraster</b> verwenden.</div>
+      <div class="set-buttons">
         <button class="btn small" id="rvImport">Importieren</button>
         <button class="btn small primary" id="rvNew">+ Neues Raster</button>
         <input type="file" id="rvFile" accept="application/json,.json" hidden>
@@ -699,7 +703,7 @@ function renderRasterVorlagen() {
         ({ id: uid(), label, weight: i === 0 ? 34 : 33, texts: {} })),
     };
     data.rubrics.push(t); save();
-    go({ name: 'rasterEdit', rasterId: t.id });
+    go({ name: 'settings', setPage: 'raster', rasterId: t.id });
   };
   const fileInput = document.getElementById('rvFile');
   document.getElementById('rvImport').onclick = () => fileInput.click();
@@ -709,10 +713,10 @@ function renderRasterVorlagen() {
     missingEx.forEach(e => data.rubrics.push(e));
     save(); renderRasterVorlagen(); toast('Beispiele hinzugefügt.');
   };
-  app().querySelectorAll('[data-act]').forEach(b => b.onclick = () => {
+  host.querySelectorAll('[data-act]').forEach(b => b.onclick = () => {
     const t = data.rubrics.find(x => x.id === b.dataset.id); if (!t) return;
     const act = b.dataset.act;
-    if (act === 'edit') go({ name: 'rasterEdit', rasterId: t.id });
+    if (act === 'edit') go({ name: 'settings', setPage: 'raster', rasterId: t.id });
     else if (act === 'blank') openRasterBlankPrint(t);
     else if (act === 'dup') {
       const copy = rasterClone(t); copy.id = uid(); copy.name = t.name + ' (Kopie)';
@@ -749,9 +753,10 @@ function importRasterFile(file) {
 }
 
 /* --- Vorlage bearbeiten --- */
-function renderRasterEdit() {
+function renderRasterEdit(host) {
+  host = host || document.getElementById('setBody');
   const t = (data.rubrics || []).find(x => x.id === route.rasterId);
-  if (!t) return go({ name: 'rasterVorlagen' });
+  if (!t || !host) return go(RASTER_LIST);
   const sum = rasterWeightSum(t);
 
   const critRows = t.criteria.map((cr, i) => `
@@ -778,11 +783,12 @@ function renderRasterEdit() {
   const gridRows = t.levels.map(l => `<tr><th class="rs-lvl"><b>${esc(l.label)}</b><span class="rs-range">${rasterRangeLabel(l, 'punkte')}</span></th>
     ${t.criteria.map(cr => `<td><textarea class="ed-text" data-c="${cr.id}" data-l="${l.id}" placeholder="Beschreibung …">${esc((cr.texts || {})[l.id] || '')}</textarea></td>`).join('')}</tr>`).join('');
 
-  app().innerHTML = `
-    <div class="page-head">
-      <div><h1>${esc(t.name || 'Raster')}</h1>
-        <div class="sub">Änderungen werden sofort gespeichert. Bereits angelegte Einschätzungen behalten ihre Fassung.</div></div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
+  host.innerHTML = `
+    <button class="set-back set-back-sub" id="edBack">‹ Alle Vorlagen</button>
+    <div class="set-toolbar">
+      <div><div class="rs-ed-name">${esc(t.name || 'Raster')}</div>
+        <div class="hint">Änderungen werden sofort gespeichert. Bereits angelegte Einschätzungen behalten ihre Fassung.</div></div>
+      <div class="set-buttons">
         <button class="btn small" id="edBlank">Leerer Bogen</button>
         <button class="btn small primary" id="edDone">Fertig</button>
       </div>
@@ -822,7 +828,8 @@ function renderRasterEdit() {
     </div>`;
 
   const rerender = () => { save(); const y = window.scrollY; renderRasterEdit(); window.scrollTo(0, y); };
-  document.getElementById('edDone').onclick = () => go({ name: 'rasterVorlagen' });
+  document.getElementById('edDone').onclick = () => go(RASTER_LIST);
+  document.getElementById('edBack').onclick = () => go(RASTER_LIST);
   document.getElementById('edBlank').onclick = () => openRasterBlankPrint(t);
   document.getElementById('edName').oninput = e => { t.name = e.target.value; save(); };
   document.getElementById('edName').onchange = rerender;
@@ -835,7 +842,7 @@ function renderRasterEdit() {
     document.getElementById('edWSum').innerHTML = Math.round(s) === 100 ? 'Summe: 100 %'
       : `<span style="color:var(--amber)">Summe: ${fmtNum(s)} %</span> — wird beim Rechnen anteilig umgerechnet.`;
   };
-  app().querySelectorAll('.rs-ed-row').forEach(row => {
+  host.querySelectorAll('.rs-ed-row').forEach(row => {
     const i = +row.dataset.i, cr = t.criteria[i];
     row.querySelector('.ed-crit-label').oninput = e => { cr.label = e.target.value; save(); };
     row.querySelector('.ed-crit-label').onchange = rerender;
@@ -852,7 +859,7 @@ function renderRasterEdit() {
   };
 
   /* Stufen */
-  app().querySelectorAll('.rs-ed-lvl').forEach(row => {
+  host.querySelectorAll('.rs-ed-lvl').forEach(row => {
     const i = +row.dataset.i, l = t.levels[i];
     row.querySelector('.ed-lvl-label').oninput = e => { l.label = e.target.value; save(); };
     row.querySelector('.ed-lvl-label').onchange = rerender;
@@ -879,7 +886,7 @@ function renderRasterEdit() {
   };
 
   /* Beschreibungen */
-  app().querySelectorAll('textarea.ed-text').forEach(ta => ta.oninput = () => {
+  host.querySelectorAll('textarea.ed-text').forEach(ta => ta.oninput = () => {
     const cr = t.criteria.find(x => x.id === ta.dataset.c); if (!cr) return;
     if (!cr.texts) cr.texts = {};
     cr.texts[ta.dataset.l] = ta.value;

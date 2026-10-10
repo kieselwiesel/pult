@@ -77,10 +77,28 @@ function load() {
   }
 }
 function save() {
+  if (typeof archiveMode !== 'undefined' && archiveMode) return;   // Archiv ansehen: nichts speichern
   try { localStorage.setItem(STORE_KEY, JSON.stringify(data)); }
   catch (e) { toast('Speichern fehlgeschlagen (Speicher voll?)'); }
 }
 const uid = () => Math.random().toString(36).slice(2, 9);
+
+/* ---------- Datenstand (Schema) ----------
+   data.meta.schema zählt, welche Umbauten der Daten schon gelaufen sind.
+   Jede Migration läuft genau einmal — beim Start und nach dem Einlesen
+   eines (älteren) Backups. Neue Umbauten hinten anhängen, SCHEMA erhöhen. */
+const SCHEMA = 2;
+const MIGRATIONS = [
+  { to: 1, run: () => migrateHaLog() },    // Hausaufgaben: 3-Zustands-Modell
+  { to: 2, run: () => migrateRaster() },   // Bewertungsraster + Beispiel-Vorlagen
+];
+function runMigrations() {
+  const from = Number(data.meta.schema) || 0;
+  if (from >= SCHEMA) return;              // aktuell — oder aus einer neueren Version: nichts anfassen
+  MIGRATIONS.filter(m => m.to > from).forEach(m => m.run());
+  data.meta.schema = SCHEMA;
+  save();
+}
 
 /* ============================================================
    Notenprotokoll (Rückgängig)
@@ -142,7 +160,7 @@ function commitChange(label, snap, opts) {
   const changes = snap
     .map(ch => ({ path: ch.path, before: ch.before, after: pathGet(ch.path) }))
     .filter(ch => !histSame(ch.before, ch.after));
-  if (!changes.length) return;                       // nichts passiert, nichts protokollieren
+  if (!changes.length) return null;                  // nichts passiert, nichts protokollieren
   if (!Array.isArray(data.history)) data.history = [];
   const now = new Date();
   const last = data.history[data.history.length - 1];
@@ -154,15 +172,17 @@ function commitChange(label, snap, opts) {
       if (prev) prev.after = ch.after; else last.changes.push(ch);
     });
     last.changes = last.changes.filter(ch => !histSame(ch.before, ch.after));
-    if (!last.changes.length) { data.history.pop(); return; }   // wieder auf Anfang: Eintrag entfällt
+    if (!last.changes.length) { data.history.pop(); return null; }   // wieder auf Anfang: Eintrag entfällt
     last.label = label; last.at = now.toISOString();
-    return;
+    return last;
   }
-  data.history.push({
+  const entry = {
     id: uid(), at: now.toISOString(), label,
     courseId: opts.courseId || null, mergeKey: opts.mergeKey || null, changes,
-  });
+  };
+  data.history.push(entry);
   while (data.history.length > HISTORY_MAX) data.history.shift();
+  return entry;
 }
 
 /* Bequemer Weg für den Normalfall: eine einzelne Note setzen.
@@ -173,9 +193,10 @@ function setGradeLogged(c, store, sId, key, v, what) {
   if (!data[store][sId]) data[store][sId] = {};
   if (v == null) delete data[store][sId][key]; else data[store][sId][key] = v;
   const s = c && c.students.find(x => x.id === sId);
-  commitChange(`${s ? studentName(s) : 'Schüler:in'} — ${what}: ${gradeStr(snap[0].before, c)} → ${gradeStr(v, c)}`,
+  const e = commitChange(`${s ? studentName(s) : 'Schüler:in'} — ${what}: ${gradeStr(snap[0].before, c)} → ${gradeStr(v, c)}`,
     snap, { courseId: c && c.id, mergeKey: `${store}:${sId}:${key}` });
   save();
+  if (e) toast(`${s ? s.firstName : ''} · ${what}: ${gradeStr(v, c)}`, { label: 'Rückgängig', fn: () => undoEntry(e.id) });
 }
 /* Sonstige Leistung über beide Halbjahre suchen (ids sind eindeutig) */
 function findSonstige(c, soId) {
@@ -214,6 +235,17 @@ function applyHistoryEntry(entryId, direction) {
     { label: 'Abbrechen', onClick: () => openHistory(historyScope) },
     { label: 'Trotzdem zurücknehmen', cls: 'danger', onClick: run },
   ]);
+}
+
+/* Schnelles Rückgängig aus dem Hinweis heraus (ohne Protokoll-Fenster) */
+function undoEntry(entryId) {
+  const e = (data.history || []).find(x => x.id === entryId);
+  if (!e || e.undone) return;
+  if (e.changes.some(ch => !histSame(pathGet(ch.path), ch.after))) return toast('Inzwischen erneut geändert — über das Notenprotokoll zurücknehmen.');
+  e.changes.forEach(ch => pathSet(ch.path, ch.before));
+  e.undone = new Date().toISOString();
+  save(); render();
+  toast('Rückgängig gemacht.');
 }
 
 /* Zeitstempel menschlich: „Heute, 14:32" */
@@ -689,14 +721,15 @@ function targetOptions(scale, current) {
   return out;
 }
 /* Blinde Flecken: keine (aktuelle) mündliche Note */
-const BLIND_DAYS = 21;
+/* Tage ohne mündliche Note, ab denen jemand als „blinder Fleck" gilt (Einstellungen → Noten) */
+const blindDays = () => Number(data.meta.blindDays) || 21;
 function blindSpot(course, hyKey, sId) {
   const cols = course.halfYears[hyKey].columns.filter(c => c.type === 'muendlich');
   const graded = cols.filter(c => (data.grades[sId] || {})[c.id] != null);
   if (!graded.length) return true;
   const dated = graded.filter(c => c.date).map(c => c.date).sort();
   if (!dated.length) return false;               // benotet aber undatiert -> nicht flaggen
-  return daysSince(dated[dated.length - 1]) > BLIND_DAYS;
+  return daysSince(dated[dated.length - 1]) > blindDays();
 }
 /* Hausaufgaben: Zählung aus dem Protokoll (course.haLog).
    Pro Erhebung hat jede:r einen von drei Zuständen: marks[sId] = 'malus'
@@ -801,11 +834,29 @@ let route = { name: 'home', courseId: null, hy: '1', view: 'simpel' };
 let navStack = [];
 function samePage(a, b) {
   return a.name === b.name && a.courseId === b.courseId &&
-         a.studentId === b.studentId && a.columnId === b.columnId && a.rasterId === b.rasterId;
+         a.studentId === b.studentId && a.columnId === b.columnId && a.rasterId === b.rasterId &&
+         (a.name !== 'settings' || (a.setPage || null) === (b.setPage || null));
 }
+/* Seite merken: iPadOS beendet Web-Apps im Hintergrund — beim nächsten Start
+   geht es dort weiter, wo man war (sofern es nicht zu lange her ist). */
+const ROUTE_KEY = 'pult.route.v1';
+const ROUTE_MAX_AGE = 3 * 3600 * 1000;
+function saveRoute() {
+  try { localStorage.setItem(ROUTE_KEY, JSON.stringify({ at: Date.now(), route, stack: navStack.slice(-15) })); } catch (e) {}
+}
+function restoreRoute() {
+  try {
+    const st = JSON.parse(localStorage.getItem(ROUTE_KEY) || 'null');
+    if (!st || Date.now() - st.at > ROUTE_MAX_AGE || !st.route) return;
+    route = Object.assign({}, route, st.route);
+    navStack = Array.isArray(st.stack) ? st.stack : [];
+  } catch (e) {}
+}
+
 function go(r) {
   closeModal();                     // ein Seitenwechsel lässt kein Fenster offen stehen
   closePrintView();
+  closeStage();
   const next = Object.assign({}, route, r);
   if (!samePage(next, route)) {
     navStack.push(route);
@@ -988,7 +1039,11 @@ function exportICS() {
     lines.push('DTSTAMP:' + icsStamp(todayISO(), '00:00'));
     lines.push('SUMMARY:' + icsEscape(t.title));
     if (t.allDay || !t.start) lines.push('DTSTART;VALUE=DATE:' + (t.date || '').replace(/-/g, ''));
-    else { lines.push('DTSTART:' + icsStamp(t.date, t.start)); if (t.end) lines.push('DTEND:' + icsStamp(t.date, t.end)); }
+    else {
+      lines.push('DTSTART:' + icsStamp(t.date, t.start)); if (t.end) lines.push('DTEND:' + icsStamp(t.date, t.end));
+      /* Erinnerung im Kalender des Geräts — Pult. selbst kann ohne Server nicht benachrichtigen */
+      lines.push('BEGIN:VALARM', 'ACTION:DISPLAY', 'DESCRIPTION:' + icsEscape(t.title), 'TRIGGER:-PT30M', 'END:VALARM');
+    }
     if (t.location) lines.push('LOCATION:' + icsEscape(t.location));
     if (t.note) lines.push('DESCRIPTION:' + icsEscape(t.note));
     lines.push('END:VEVENT');
@@ -1003,84 +1058,24 @@ function exportICS() {
   toast('Termine als ICS exportiert.');
 }
 
-/* ---------- Backup (JSON export / import) ---------- */
-function downloadBackupFile(dataObj, filename) {
-  const payload = JSON.stringify({ app: 'Pult', version: 3, exportedAt: new Date().toISOString(), data: dataObj }, null, 2);
-  const blob = new Blob([payload], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = filename;
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-/* Volles Backup mit Klarnamen — die eigentliche Sicherung */
-function exportBackup() {
-  data.meta.lastBackup = todayISO();
-  save();
-  downloadBackupFile(data, `pult-backup-${todayISO()}.json`);
-  toast('Backup gespeichert.');
-  if (route.name === 'home') render();
-}
-/* Ersetzt Schülernamen durch eine Nummer je Kurs (alphabetisch nach Nachname).
-   Arbeitet auf einem Klon; IDs und alle Noten bleiben verknüpft. */
-function pseudonymizeData(d) {
-  (d.courses || []).forEach(c => {
-    const ordered = (c.students || []).slice().sort((a, b) =>
-      (a.lastName || '').localeCompare(b.lastName || '', 'de') ||
-      (a.firstName || '').localeCompare(b.firstName || '', 'de'));
-    /* Kurzinfos (z. B. Nachteilsausgleich) sind personenbezogen und fliegen mit raus */
-    ordered.forEach((s, i) => { s.firstName = String(i + 1).padStart(2, '0'); s.lastName = ''; s.info = ''; });
-    /* Rückmeldungen in Raster-Einschätzungen ebenso */
-    ['1', '2'].forEach(h => ((c.halfYears || {})[h] || { columns: [] }).columns.forEach(col => {
-      if (col.raster) Object.values(col.raster.ratings || {}).forEach(r => { r.comment = ''; });
-    }));
-  });
-  /* Im Notenprotokoll stehen Klarnamen in den Beschriftungen — fliegt komplett raus */
-  d.history = [];
-  return d;
-}
-/* Pseudonymisiertes Backup zum Teilen/Ablegen ohne Namen.
-   Setzt den „letztes Backup"-Zähler NICHT zurück (kein vollwertiger Namens-Restore). */
-function exportBackupPseudonym() {
-  const clone = pseudonymizeData(JSON.parse(JSON.stringify(data)));
-  downloadBackupFile(clone, `pult-backup-pseudonym-${todayISO()}.json`);
-  toast('Pseudonymisiertes Backup gespeichert.');
-}
-function importBackupFile(file) {
-  const reader = new FileReader();
-  reader.onload = () => {
-    try {
-      const parsed = JSON.parse(reader.result);
-      const incoming = parsed && parsed.data ? parsed.data : parsed;
-      if (!incoming || !Array.isArray(incoming.courses)) throw new Error('kein Pult-Backup');
-      modal('Backup einlesen?', `<p>Das Backup enthält <b>${incoming.courses.length} Kurse</b>. Der aktuelle Datenbestand in diesem Browser wird <b>ersetzt</b>.</p>`, [
-        { label: 'Abbrechen', onClick: closeModal },
-        { label: 'Ersetzen', cls: 'primary', onClick: () => {
-          data = Object.assign(DEFAULT_DATA(), incoming);
-          save(); closeModal(); go({ name: 'home' });
-          toast('Backup eingelesen.');
-        }},
-      ]);
-    } catch (e) {
-      toast('Datei ist kein gültiges Pult-Backup.');
-    }
-  };
-  reader.readAsText(file);
-}
-
 /* ============================================================
    RENDER
    ============================================================ */
 const app = () => document.getElementById('app');
 
 function render() {
+  saveRoute();
   renderTopNav();
   renderTopbarRight();
   renderBackFab();
   if (route.name === 'ka') return renderKA();
   if (route.name === 'raster') return renderRaster();
-  if (route.name === 'rasterVorlagen') return renderRasterVorlagen();
-  if (route.name === 'rasterEdit') return renderRasterEdit();
+  if (route.name === 'gruppen') return renderGruppen();
+  /* frühere eigene Seiten der Raster-Vorlagen — liegen jetzt in den Einstellungen */
+  if (route.name === 'rasterVorlagen' || route.name === 'rasterEdit') {
+    route = Object.assign({}, route, { name: 'settings', setPage: 'raster', rasterId: route.name === 'rasterEdit' ? route.rasterId : null });
+    return renderSettings();
+  }
   if (route.name === 'ha') return renderHaPage();
   if (route.name === 'seating') return renderSeating();
   if (route.name === 'student') return renderStudent();
@@ -1100,7 +1095,7 @@ const TOP_PAGES = [
   { name: 'termine', label: 'Termine' },
 ];
 /* Unterseiten eines Kurses gehören navigatorisch zu „Kurse" */
-const COURSE_SUBPAGES = ['course', 'student', 'ka', 'ha', 'seating', 'raster'];
+const COURSE_SUBPAGES = ['course', 'student', 'ka', 'ha', 'seating', 'raster', 'gruppen'];
 /* Seiten, die zu den Einstellungen gehören */
 const SETTINGS_SUBPAGES = ['settings', 'rasterVorlagen', 'rasterEdit'];
 function navActive() { return COURSE_SUBPAGES.includes(route.name) ? 'courses' : route.name; }
@@ -1121,10 +1116,13 @@ function renderTopbarRight() {
   const active = SETTINGS_SUBPAGES.includes(route.name) ? ' active' : '';
   const lockBtn = lockCfg.enabled
     ? `<button class="icon-btn topbar-lock" id="btnLock" title="Jetzt sperren" aria-label="App sperren">${LOCK_SVG}</button>` : '';
-  el.innerHTML = `${lockBtn}<button class="btn ghost small topbar-settings${active}" id="btnSettings">Einstellungen</button>`;
-  document.getElementById('btnSettings').onclick = () => go({ name: 'settings' });
+  const dot = updateInfo ? '<span class="upd-dot" title="Update verfügbar"></span>' : '';
+  el.innerHTML = `<button class="icon-btn topbar-search" id="btnSearch" title="Suchen (⌘K)" aria-label="Suchen">${SEARCH_SVG}</button>${lockBtn}<button class="btn ghost small topbar-settings${active}" id="btnSettings">Einstellungen${dot}</button>`;
+  document.getElementById('btnSearch').onclick = openSearch;
+  document.getElementById('btnSettings').onclick = () => go({ name: 'settings', setPage: null });
   if (lockCfg.enabled) document.getElementById('btnLock').onclick = () => lockNow(false);
 }
+const SEARCH_SVG = `<svg width="19" height="19" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="7" cy="7" r="4.6"/><path d="M10.4 10.4 L14 14"/></svg>`;
 /* „Zurück" nur zeigen, wenn es eine vorherige Seite gibt */
 function renderBackFab() {
   const el = document.getElementById('backFab');
@@ -1138,7 +1136,7 @@ function findKaColumn(c) {
 /* ---------- Kurse (Übersicht) ---------- */
 function renderCourses() {
   const studCount = data.courses.reduce((a, c) => a + c.students.length, 0);
-  const backupOverdue = data.courses.length && (!data.meta.lastBackup || daysSince(data.meta.lastBackup) > 7);
+  const backupOverdue = backupIsOverdue();
 
   app().innerHTML = `
     ${backupOverdue ? `<div class="notice" id="backupNote" style="display:flex;justify-content:space-between;align-items:center;gap:12px;border-color:var(--amber)">
@@ -1147,13 +1145,17 @@ function renderCourses() {
 
     <div class="page-head">
       <div><h1>Kurse</h1><div class="sub">${data.courses.length} Kurse · ${studCount} Schüler:innen insgesamt</div></div>
-      <button class="btn primary" id="btnNewCourse">+ Neuer Kurs</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn" id="btnPrintAll" title="Zeugnisübersicht aller Kurse">Drucken</button>
+        <button class="btn primary" id="btnNewCourse">+ Neuer Kurs</button>
+      </div>
     </div>
 
     <div class="course-grid" id="courseGrid"></div>
   `;
 
   document.getElementById('btnNewCourse').onclick = () => openCourseForm();
+  document.getElementById('btnPrintAll').onclick = openAllCoursesPrint;
   const bn = document.getElementById('backupNow'); if (bn) bn.onclick = exportBackup;
 
   const grid = document.getElementById('courseGrid');
@@ -1213,7 +1215,7 @@ function renderHome() {
   const zeugnis = weeksUntil(data.meta.zeugnisDatum);
   const openTodos = (data.todos || []).filter(t => !t.done).length;
   const nextTermin = upcomingTermine(1)[0];
-  const backupOverdue = data.courses.length && (!data.meta.lastBackup || daysSince(data.meta.lastBackup) > 7);
+  const backupOverdue = backupIsOverdue();
 
   const weekTile = (w, dateIso) => {
     if (!w) return `<div class="value">–</div><div class="foot">Datum festlegen ›</div>`;
@@ -1229,9 +1231,13 @@ function renderHome() {
     return `<th class="tt-day ${isToday ? 'tt-today' : ''}"><span class="tt-wd">${wd}</span><span class="tt-date">${fmtDate(iso)}</span></th>`;
   }).join('');
 
+  /* laufende Stunde (nur in der aktuellen Woche) */
+  const ln = wdToday ? lessonNow() : { now: null };
+  const nowPi = ln.now ? ln.now.index : -1;
   const bodyRows = periods.map((p, pi) => {
     const cells = [1, 2, 3, 4, 5].map(day => {
       const isToday = day === wdToday;
+      const isNow = isToday && pi === nowPi;
       const l = lessonAt(day, pi, week);
       if (l && l.placeholder) {
         const label = esc(l.label || 'Freitext');
@@ -1247,8 +1253,8 @@ function renderHome() {
         const sub = c ? `${esc(c.className)}${l.room ? ' · ' + esc(l.room) : ''}` : '';
         /* nur Stunden, die es nicht in beiden Wochen gibt, bekommen die Marke */
         const mark = ab && (l.week || 0) ? `<span class="tt-ab">${AB_LABEL[l.week]}</span>` : '';
-        return `<td class="tt-cell ${isToday ? 'tt-today' : ''}">
-          <button class="tt-lesson" data-day="${day}" data-period="${pi}" style="background:${col.bg};color:${col.fg};border-left-color:${col.bar}">
+        return `<td class="tt-cell ${isToday ? 'tt-today' : ''} ${isNow ? 'tt-now' : ''}">
+          <button class="tt-lesson" data-day="${day}" data-period="${pi}" style="--c-bg:${col.bg};--c-fg:${col.fg};--c-bar:${col.bar}">
             ${mark}<span class="tt-subject">${label}</span><span class="tt-meta">${sub}</span></button></td>`;
       }
       return `<td class="tt-cell ${isToday ? 'tt-today' : ''} ${planEdit ? 'tt-editable' : ''}">
@@ -1300,6 +1306,7 @@ function renderHome() {
     ${planEdit ? `<div class="notice">Tippe auf ein Feld, um einen Kurs einzutragen oder zu ändern.</div>`
       : (hasLessons ? '' : `<div class="notice">Noch keine Stunden eingetragen. Tippe auf <b>Plan bearbeiten</b> und fülle das Raster.</div>`)}
 
+    ${planEdit ? '' : nowBarHtml()}
     ${weekTabs}
 
     <div class="tt-wrap">
@@ -1315,8 +1322,11 @@ function renderHome() {
   `;
 
   document.getElementById('backupHint').onclick = exportBackup;
-  document.getElementById('dashFerien').onclick = () => go({ name: 'settings' });
-  document.getElementById('dashZeugnis').onclick = () => go({ name: 'settings' });
+  app().querySelectorAll('[data-now]').forEach(b => b.onclick = () => {
+    const c = getCourse(b.dataset.now); if (c) go({ name: 'course', courseId: c.id, hy: defaultHalfYear(c), view: 'simpel' });
+  });
+  document.getElementById('dashFerien').onclick = () => go({ name: 'settings', setPage: 'schuljahr' });
+  document.getElementById('dashZeugnis').onclick = () => go({ name: 'settings', setPage: 'schuljahr' });
   document.getElementById('dashTodos').onclick = () => go({ name: 'todos' });
   document.getElementById('dashTermin').onclick = () => go({ name: 'termine' });
   document.getElementById('btnPeriods').onclick = openPeriodsEditor;
@@ -1410,7 +1420,7 @@ function openPeriodsEditor() {
     <button class="btn small" id="prAdd" style="margin-top:10px">+ Stunde</button>
   `, [
     { label: 'Abbrechen', onClick: closeModal },
-    { label: 'Speichern', cls: 'primary', onClick: () => { flush(); save(); closeModal(); renderHome(); } },
+    { label: 'Speichern', cls: 'primary', onClick: () => { flush(); save(); closeModal(); render(); } },
   ]);
   const rebind = () => {
     document.querySelectorAll('.pr-del').forEach(b => b.onclick = () => {
@@ -1598,6 +1608,7 @@ function renderCourse() {
         <button class="btn small" id="btnZwischen">+ Zwischenstand</button>
         <button class="btn small" id="btnSeating" title="Sitzplan">${SEAT_ICON} Sitzplan</button>
         <button class="btn small" id="btnStudents">Schüler:innen</button>
+        <button class="btn small" id="btnPrint">Drucken</button>
         <button class="btn small" id="btnMore">Mehr</button>
       </div>
     </div>
@@ -1639,6 +1650,7 @@ function renderCourse() {
   document.getElementById('btnSeating').onclick = () => { seatPending = null; go({ name: 'seating', courseId: c.id, seatMode: initialSeatMode(c) }); };
   document.getElementById('btnZwischen').onclick = () => createZwischenstand(c);
   document.getElementById('btnMore').onclick = () => openMoreMenu(c);
+  document.getElementById('btnPrint').onclick = () => openCoursePrint(c);
   document.getElementById('btnAdd').onclick = () => openAddMenu(c);
   document.getElementById('btnDurch').onclick = () => startDurchtippen(c);
   document.getElementById('btnSonstige').onclick = () => openSonstige(c);
@@ -1699,129 +1711,7 @@ function openZwischenstand(c, colId) {
   };
 }
 
-/* ============================================================
-   Schüler-Detailseite (Hub: alle Noten + Rechenweg)
-   ============================================================ */
-function renderStudent() {
-  const c = getCourse(route.courseId);
-  if (!c) return go({ name: 'home' });
-  const s = c.students.find(x => x.id === route.studentId);
-  if (!s) return go({ name: 'course', courseId: c.id });
-  const scale = c.scale;
-
-  const valChip = (pts, avg) => {
-    const gc = gradeColor(pts);
-    const fg = (gc.fg === 'var(--g-top-fg)' || gc.fg === 'var(--g-fail-fg)') ? gc.fg : (gc.fg === 'var(--line)' ? 'var(--ink-faint)' : gc.fg);
-    const bg = gc.bg === 'transparent' ? 'transparent' : gc.bg;
-    return `<span class="sd-chip" style="background:${bg};color:${fg}">${fmtGrade(pts, scale, avg)}</span>`;
-  };
-
-  const leistungRow = (col, hyKey, parts) => {
-    const v = (data.grades[s.id] || {})[col.id];
-    const p = (parts || []).find(x => x.col.id === col.id);
-    const share = p ? ` <span class="cs-sub">· ${fmtNum(p.pct)} %${p.fixed ? ' fest' : ''}</span>`
-      : (colWeighted(col) ? ` <span class="cs-sub">· ${weightLabel(col)}</span>` : '');
-    return `<div class="cs-line sd-grade" data-col="${col.id}" data-hy="${hyKey}">
-      <span>${esc(col.label)}${kaPill(col)}${rasterPill(col)}${col.date?` <span class="cs-sub">${fmtDate(col.date)}</span>`:''}${share}</span>
-      <span class="cs-vals">${valChip(v, false)}</span></div>`;
-  };
-  const sonstRow = (so) => {
-    const v = (data.sonstigeValues[s.id] || {})[so.id];
-    return `<div class="cs-line sd-sonst" data-so="${so.id}" data-hy-sonst><span>Bonus: ${esc(so.label)} (${so.percent}%)</span><span class="cs-vals">${valChip(v, false)}</span></div>`;
-  };
-
-  const hyBlock = (hyKey) => {
-    const hy = c.halfYears[hyKey];
-    const comp = computeHalf(c, hyKey, s.id);
-    const eff = effGesamt(c, hyKey, s.id);
-    const schrift = hy.columns.filter(x => x.type === 'schriftlich');
-    const muend = hy.columns.filter(x => x.type === 'muendlich');
-    const manual = eff.manual != null && eff.computed != null;
-    return `<div class="calc-block">
-      <h3>${hyKey}. Halbjahr</h3>
-      <div class="cs-sub" style="margin-bottom:4px">Schriftlich</div>
-      ${schrift.length ? schrift.map(col => leistungRow(col, hyKey, comp.wParts)).join('') : '<div class="cs-line cs-sub"><span>keine</span><span></span></div>'}
-      ${hy.sonstige.filter(x=>x.scope==='schriftlich').map(sonstRow).join('')}
-      <div class="cs-line"><span><b>Ø schriftlich</b></span><span class="cs-vals">${fmtGrade(comp.wAvg, scale, true)}</span></div>
-      <div class="cs-sub" style="margin:8px 0 4px">Mündlich</div>
-      ${muend.length ? muend.map(col => leistungRow(col, hyKey, comp.mParts)).join('') : '<div class="cs-line cs-sub"><span>keine</span><span></span></div>'}
-      ${hy.sonstige.filter(x=>x.scope==='muendlich').map(sonstRow).join('')}
-      <div class="cs-line"><span><b>Ø mündlich</b></span><span class="cs-vals">${fmtGrade(comp.mAvg, scale, true)}</span></div>
-      ${hy.sonstige.filter(x=>x.scope==='allgemein').map(sonstRow).join('')}
-      <div class="cs-line total"><span>Gesamtnote${manual?' (manuell)':''}</span>
-        <span class="cs-vals">${valChip(eff.value, true)}${manual?` <span class="cs-sub">(${fmtGrade(eff.computed, scale, true)})</span>`:''}</span></div>
-      <button class="btn small sd-calc" data-hy="${hyKey}" style="margin-top:8px">Rechenweg & Note setzen</button>
-    </div>`;
-  };
-
-  const endj = effEndjahr(c, s.id);
-  const endManual = endj.manual != null && endj.computed != null;
-  const series = gradeSeries(c, s.id, ['1', '2'], 'muendlich');
-
-  app().innerHTML = `
-    <div class="page-head">
-      <div>
-        <h1>${esc(s.firstName)} ${esc(s.lastName||'')}</h1>
-        <div class="sub">${esc(c.subject)} ${esc(c.className)} · ${scaleName(scale)}${s.entry?' · Eintritt '+fmtDateLong(s.entry):''}${s.exit?' · Austritt '+fmtDateLong(s.exit):''}</div>
-      </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn small" id="sdSim">Was brauche ich noch?</button>
-        <button class="btn small" id="sdInfo">Kurzinfo</button>
-        <button class="btn small" id="sdNotes">Notizen</button>
-        <button class="btn small" id="sdEdit">Stammdaten</button>
-      </div>
-    </div>
-
-    ${s.info ? `<div class="notice info-note"><span class="info-i" title="Kurzinfo">i</span> ${esc(s.info)}</div>` : ''}
-
-    <div class="calc-block">
-      <h3>Notenverlauf (mündlich)</h3>
-      ${verlaufSvg(series, scale)}
-    </div>
-
-    <div class="row2" style="align-items:start;gap:20px">
-      ${hyBlock('1')}
-      ${hyBlock('2')}
-    </div>
-
-    <div class="calc-block" style="border-left:4px solid var(--accent)">
-      <h3>Endjahresnote (${c.weightHY1}/${c.weightHY2})</h3>
-      <div class="cs-line"><span>Gesamt 1. Halbjahr</span><span class="cs-vals">${fmtGrade(endj.g1, scale, true)}</span></div>
-      <div class="cs-line"><span>Gesamt 2. Halbjahr</span><span class="cs-vals">${fmtGrade(endj.g2, scale, true)}</span></div>
-      <div class="cs-line total"><span>Endjahr${endManual?' (manuell)':''}</span>
-        <span class="cs-vals">${valChip(endj.value, true)}${endManual?` <span class="cs-sub">(${fmtGrade(endj.computed, scale, true)})</span>`:''}</span></div>
-      <button class="btn small" id="sdEndCalc" style="margin-top:8px">Rechenweg & Note setzen</button>
-    </div>
-
-    <div class="notice" style="margin-top:16px">Hausaufgaben: <b>${haCounts(c, s.id).gemacht}×</b> gemacht, <b>${haCounts(c, s.id).nicht}×</b> nicht gemacht.</div>
-  `;
-
-  document.getElementById('sdEdit').onclick = () => openStudentForm(c, s.id);
-  document.getElementById('sdInfo').onclick = () => openInfoEdit(c, s, () => renderStudent());
-  document.getElementById('sdSim').onclick = () => openSimulator(c, s.id);
-  document.getElementById('sdNotes').onclick = () => openNotes(c, s.id);
-  app().querySelectorAll('.sd-grade').forEach(row => row.onclick = () => {
-    const col = c.halfYears[row.dataset.hy].columns.find(x => x.id === row.dataset.col);
-    if (col.ka) return go({ name: 'ka', courseId: c.id, hy: row.dataset.hy, columnId: col.id, kaTab: 'eingabe' });
-    if (col.raster) return openRasterCol(c, col, s.id);
-    const cur = (data.grades[s.id] || {})[col.id];
-    openPad(`${esc(s.firstName)} — ${esc(col.label)}`, cur, v => {
-      setGradeLogged(c, 'grades', s.id, col.id, v, col.label);
-      renderStudent();
-    }, scale);
-  });
-  app().querySelectorAll('.sd-sonst').forEach(row => row.onclick = () => {
-    const soId = row.dataset.so;
-    const so = findSonstige(c, soId);
-    const cur = (data.sonstigeValues[s.id] || {})[soId];
-    openPad(`${esc(s.firstName)} — Bonus`, cur, v => {
-      setGradeLogged(c, 'sonstigeValues', s.id, soId, v, `${so ? so.label : 'Bonus'} (Bonus)`);
-      renderStudent();
-    }, scale);
-  });
-  app().querySelectorAll('.sd-calc').forEach(b => b.onclick = () => { route.hy = b.dataset.hy; openCalc(c, s.id, 'gesamt'); });
-  document.getElementById('sdEndCalc').onclick = () => openCalc(c, s.id, 'endjahr');
-}
+/* Schüler-Detailseite: siehe schueler.js */
 
 /* ============================================================
    Klassenarbeit — eigene Seite (Eingabe / Bewertung / Statistik)
@@ -2371,7 +2261,7 @@ function renderTable(c) {
   }).join('');
 
   const blindCount = c.students.filter(s => studentActive(s) && blindSpot(c, route.hy, s.id)).length;
-  const blindNote = blindCount ? `<div class="notice" style="border-color:var(--amber);display:flex;align-items:center;gap:8px"><span class="blind-dot"></span> ${blindCount} ohne aktuelle mündliche Note (über ${BLIND_DAYS} Tage bzw. keine).</div>` : '';
+  const blindNote = blindCount ? `<div class="notice" style="border-color:var(--amber);display:flex;align-items:center;gap:8px"><span class="blind-dot"></span> ${blindCount} ohne aktuelle mündliche Note (über ${blindDays()} Tage bzw. keine).</div>` : '';
   // Scroll-Position der Tabelle über den Neuaufbau hinweg bewahren
   const prevWrap = host.querySelector('.table-wrap');
   const prevLeft = prevWrap ? prevWrap.scrollLeft : 0;
@@ -2418,7 +2308,7 @@ function openPad(title, current, onPick, scale) {
   let pad = '';
   for (let p = 15; p >= 0; p--) {
     const gc = gradeColor(p);
-    const bg = gc.bg === 'transparent' ? '#fff' : gc.bg;
+    const bg = gc.bg === 'transparent' ? 'var(--card)' : gc.bg;
     const fg = gc.fg === 'var(--line)' ? 'var(--ink)' : gc.fg;
     const big = scale === 'noten' ? NOTE_MAP[p] : pad2(p);
     const sub = scale === 'noten' ? `${pad2(p)} P.` : NOTE_MAP[p];
@@ -2851,7 +2741,7 @@ function renderSeating() {
       if (mode === 'note') {
         const v = noteCol ? (data.grades[s.id] || {})[noteCol.id] : null;
         const gc = gradeColor(v);
-        const bg = gc.bg === 'transparent' ? '#fff' : gc.bg;
+        const bg = gc.bg === 'transparent' ? 'var(--card)' : gc.bg;
         const fg = gc.fg === 'var(--line)' ? 'var(--ink-faint)' : gc.fg;
         extra = `<span class="seat-val" style="background:${bg};color:${fg}">${v == null ? '·' : fmtGrade(v, c.scale, false)}</span>`;
       } else if (mode === 'ha') {
@@ -2874,7 +2764,7 @@ function renderSeating() {
     <div class="page-head">
       <div><h1>Sitzplan</h1>
         <div class="sub">${esc(c.subject)} ${esc(c.className)} · ${c.students.filter(studentActive).length - offen.length} von ${c.students.filter(studentActive).length} platziert</div></div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">${tools}</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">${tools}<button class="btn small" id="spPrint">Drucken</button></div>
     </div>
 
     <div class="tabs">
@@ -2898,6 +2788,7 @@ function renderSeating() {
 
   app().querySelectorAll('.tab').forEach(t => t.onclick = () => { seatPending = null; go({ seatMode: t.dataset.sm }); });
 
+  document.getElementById('spPrint').onclick = () => openCoursePrintOpts(c, 'sitzplan', null, true);
   const gEl = document.getElementById('spGrid'); if (gEl) gEl.onclick = () => openSeatGrid(c);
   const fEl = document.getElementById('spFill'); if (fEl) fEl.onclick = () => seatingAutoFill(c);
   const cEl = document.getElementById('spClear'); if (cEl) cEl.onclick = () => {
@@ -3095,7 +2986,7 @@ function openDurchtippen(c, colId, idx) {
   const trendTxt = info.trend === 'up' ? `steigend ${trendArrowSvg('up')}` : info.trend === 'down' ? `fallend ${trendArrowSvg('down')}` : info.trend === 'flat' ? 'gleichbleibend' : '—';
   let pad = '';
   for (let p = 15; p >= 0; p--) {
-    const gc = gradeColor(p); const bg = gc.bg === 'transparent' ? '#fff' : gc.bg; const fg = gc.fg === 'var(--line)' ? 'var(--ink)' : gc.fg;
+    const gc = gradeColor(p); const bg = gc.bg === 'transparent' ? 'var(--card)' : gc.bg; const fg = gc.fg === 'var(--line)' ? 'var(--ink)' : gc.fg;
     const big = scale === 'noten' ? NOTE_MAP[p] : pad2(p); const sub = scale === 'noten' ? `${pad2(p)} P.` : NOTE_MAP[p];
     pad += `<button data-p="${p}" class="${cur===p?'sel':''}" style="background:${bg};color:${fg}">${big}<span class="nt" style="color:${fg}">${sub}</span></button>`;
   }
@@ -3136,6 +3027,10 @@ function openAddMenu(c) {
 /* Mehr-Menü */
 function openMoreMenu(c) {
   modal('Mehr', `<div class="chip-list">
+    <button class="btn" style="width:100%" id="mmGroups">Gruppen bilden</button>
+    <button class="btn" style="width:100%" id="mmPick">Wer ist dran?</button>
+    <button class="btn" style="width:100%" id="mmTimer">Timer</button>
+    <hr style="border:none;border-top:1px solid var(--line-soft);margin:4px 0">
     <button class="btn" style="width:100%" id="mmHa">Hausaufgaben protokollieren</button>
     <button class="btn" style="width:100%" id="mmNotes">Kursnotizen</button>
     <button class="btn" style="width:100%" id="mmLists">Einsammel-Listen</button>
@@ -3143,6 +3038,9 @@ function openMoreMenu(c) {
     <button class="btn" style="width:100%" id="mmEdit">Kurs bearbeiten</button>
   </div>`, [{ label: 'Schließen', onClick: closeModal }]);
   document.getElementById('mmLog').onclick = () => openHistory(c.id);
+  document.getElementById('mmGroups').onclick = () => { closeModal(); groupMove = null; go({ name: 'gruppen', courseId: c.id }); };
+  document.getElementById('mmPick').onclick = () => openPicker(c);
+  document.getElementById('mmTimer').onclick = () => { closeModal(); openTimer(); };
   document.getElementById('mmHa').onclick = () => { closeModal(); go({ name: 'ha', courseId: c.id }); };
   document.getElementById('mmNotes').onclick = () => openNotes(c, null);
   document.getElementById('mmLists').onclick = () => openLists(c);
@@ -3249,7 +3147,8 @@ document.getElementById('backFab').onclick = goBack;
 /* ---------- Kurs anlegen / bearbeiten ---------- */
 function openCourseForm(course) {
   const editing = !!course;
-  const c = course || { subject: '', className: '', weightWritten: 40, weightOral: 60, weightHY1: 30, weightHY2: 70 };
+  const cd = courseDefaults();
+  const c = course || { subject: '', className: '', scale: cd.scale, weightWritten: cd.weightWritten, weightOral: 100 - cd.weightWritten, weightHY1: cd.weightHY1, weightHY2: 100 - cd.weightHY1 };
   modal(editing ? 'Kurs bearbeiten' : 'Neuer Kurs', `
     <div class="row2">
       <div class="field"><label>Fach</label><input id="fSubject" type="text" value="${esc(c.subject)}" placeholder="z. B. Mathematik"></div>
@@ -3645,518 +3544,14 @@ function openImport(c) {
   };
 }
 
-/* ============================================================
-   App-Sperre
-   ------------------------------------------------------------
-   Sichtschutz: 4-stelliger Code, optional zusätzlich Face ID / Touch ID
-   (WebAuthn mit der Geräte-Entsperrung). Der Code bleibt immer als Rückweg.
-
-   Die Einstellungen liegen bewusst NICHT in `data`: So wandern sie weder
-   ins Backup, noch überschreibt das Einlesen eines Backups die Sperre.
-
-   Grenze: Die Daten selbst bleiben unverschlüsselt im localStorage. Die
-   Sperre hält neugierige Blicke am Pult fern — nicht jemanden, der mit den
-   Entwicklerwerkzeugen des Browsers umgehen kann.
-   ============================================================ */
-const LOCK_KEY = 'pult.lock.v1';
-const PIN_LEN = 4;
-const LOCK_DEFAULT = () => ({
-  enabled: false,
-  pinHash: '', pinSalt: '',
-  credId: '',          // WebAuthn-Credential (base64url) für Face ID / Touch ID
-  onStart: true,       // beim Öffnen der App immer sperren
-  autoLock: 5,         // -1 nie · 0 sofort beim Verlassen der App · sonst Minuten Inaktivität
-  fails: 0, blockedUntil: 0,
-  lastActive: 0,       // letzte Bedienung (ms) — damit auch ein Neustart die Inaktivität kennt
-});
-const AUTOLOCK_OPTIONS = [
-  [-1, 'Nie — nur über den Sperrknopf'], [0, 'Sofort beim Verlassen der App'],
-  [1, 'Nach 1 Minute ohne Bedienung'], [5, 'Nach 5 Minuten ohne Bedienung'],
-  [10, 'Nach 10 Minuten ohne Bedienung'], [15, 'Nach 15 Minuten ohne Bedienung'],
-  [30, 'Nach 30 Minuten ohne Bedienung'],
-];
-const LOCK_SVG = `<svg width="18" height="18" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3" y="7" width="10" height="7.5"/><path d="M5.2 7V4.8a2.8 2.8 0 0 1 5.6 0V7"/></svg>`;
-const BIO_SVG = `<svg width="30" height="30" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8V4.5A1.5 1.5 0 0 1 4.5 3H8M16 3h3.5A1.5 1.5 0 0 1 21 4.5V8M21 16v3.5a1.5 1.5 0 0 1-1.5 1.5H16M8 21H4.5A1.5 1.5 0 0 1 3 19.5V16"/><path d="M8.5 9v1.5M15.5 9v1.5M12 9v4h-1M9 16c1.8 1.3 4.2 1.3 6 0"/></svg>`;
-const DEL_SVG = `<svg width="28" height="28" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M9 5h11v14H9l-6-7z"/><path d="M12.5 9.5l5 5M17.5 9.5l-5 5" stroke-linecap="round"/></svg>`;
-
-let lockCfg = loadLock();
-let lastActivity = Date.now();
-let pinMode = null;      // offener Code-Bildschirm: 'lock' | 'verify' | 'setup' | null
-let pinCleanup = null;
-let pinBio = null;       // Face-ID-Versuch des offenen Sperrbildschirms
-
-function loadLock() {
-  try { return Object.assign(LOCK_DEFAULT(), JSON.parse(localStorage.getItem(LOCK_KEY) || '{}')); }
-  catch (e) { return LOCK_DEFAULT(); }
-}
-function saveLock() { try { localStorage.setItem(LOCK_KEY, JSON.stringify(lockCfg)); } catch (e) {} }
-
-const b64u = {
-  enc: buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''),
-  dec: s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), ch => ch.charCodeAt(0)),
-};
-/* SHA-256 nur, damit der Code nicht im Klartext herumliegt. crypto.subtle gibt es
-   nur über https/localhost — sonst genügt ein einfacher Hash (bei 4 Ziffern
-   ist beides ohnehin kein Schutz gegen gezieltes Durchprobieren). */
-async function hashPin(pin, salt) {
-  const bytes = new TextEncoder().encode(salt + ':' + pin);
-  if (window.crypto && crypto.subtle) return b64u.enc(await crypto.subtle.digest('SHA-256', bytes));
-  let h = 2166136261;
-  for (const b of bytes) { h ^= b; h = Math.imul(h, 16777619); }
-  return 'f' + (h >>> 0).toString(36);
-}
-async function setPin(pin) {
-  lockCfg.pinSalt = b64u.enc(crypto.getRandomValues(new Uint8Array(16)));
-  lockCfg.pinHash = await hashPin(pin, lockCfg.pinSalt);
-  lockCfg.fails = 0; lockCfg.blockedUntil = 0;
-}
-function blockedLeft() { return Math.max(0, Math.ceil((lockCfg.blockedUntil - Date.now()) / 1000)); }
-
-/* ---------- Face ID / Touch ID (WebAuthn) ----------
-   Braucht https (oder localhost). Es wird nur geprüft, dass die Geräte-Entsperrung
-   gelingt — ein Server, der die Signatur prüfen könnte, gibt es ja nicht. */
-function bioSupported() { return window.isSecureContext && !!window.PublicKeyCredential && !!navigator.credentials; }
-async function bioAvailable() {
-  if (!bioSupported()) return false;
-  try { return await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable(); } catch (e) { return false; }
-}
-function bioName() { return /iPhone|iPad|Macintosh/.test(navigator.userAgent) ? 'Face ID / Touch ID' : 'Geräte-Entsperrung'; }
-async function bioRegister() {
-  const cred = await navigator.credentials.create({ publicKey: {
-    challenge: crypto.getRandomValues(new Uint8Array(32)),
-    rp: { name: 'Pult.' },
-    user: { id: crypto.getRandomValues(new Uint8Array(16)), name: 'Pult.', displayName: 'Pult. App-Sperre' },
-    pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
-    authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'discouraged' },
-    timeout: 60000, attestation: 'none',
-  }});
-  lockCfg.credId = b64u.enc(cred.rawId);
-  saveLock();
-}
-async function bioVerify() {
-  const cred = await navigator.credentials.get({ publicKey: {
-    challenge: crypto.getRandomValues(new Uint8Array(32)),
-    allowCredentials: [{ type: 'public-key', id: b64u.dec(lockCfg.credId), transports: ['internal'] }],
-    userVerification: 'required', timeout: 60000,
-  }});
-  if (!cred || b64u.enc(cred.rawId) !== lockCfg.credId) throw new Error('Falsches Credential');
-}
-
-/* ---------- Code-Bildschirm ----------
-   Einer für alles: 'lock' (App gesperrt), 'verify' (Code bestätigen, z. B. vor
-   dem Ausschalten der Sperre), 'setup' (neuen Code zweimal eingeben).
-   Der Bildschirm liegt über der App, statt sie zu ersetzen — ein offenes
-   Fenster samt halb getipptem Text ist nach dem Entsperren noch da. */
-function setAppInert(on) {
-  ['app', 'modalBackdrop', 'backFab', 'printView'].forEach(id => { const n = document.getElementById(id); if (n) n.inert = on; });
-  document.querySelector('.topbar').inert = on;
-}
-function closePinScreen() { if (pinCleanup) { pinCleanup(); pinCleanup = null; } }
-
-function pinScreen({ mode, title, autoBio, onDone, onCancel }) {
-  closePinScreen();
-  pinMode = mode;
-  setAppInert(true);
-  if (document.activeElement) document.activeElement.blur();
-
-  const useBio = mode !== 'setup' && !!lockCfg.credId && bioSupported();
-  const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', useBio ? 'bio' : '', '0', 'del'];
-  const el = document.createElement('div');
-  el.className = 'lockscreen';
-  el.setAttribute('role', 'dialog'); el.setAttribute('aria-modal', 'true');
-  el.innerHTML = `
-    <div class="ls-inner">
-      <div class="ls-brand">Pult<span class="dot">.</span></div>
-      <div class="ls-title"></div>
-      <div class="ls-dots">${'<i></i>'.repeat(PIN_LEN)}</div>
-      <div class="ls-msg" aria-live="polite"></div>
-      <div class="ls-pad">${keys.map(k =>
-        k === '' ? '<span></span>'
-        : k === 'bio' ? `<button class="ls-key ls-fn" data-k="bio" aria-label="${bioName()}" title="${bioName()}">${BIO_SVG}</button>`
-        : k === 'del' ? `<button class="ls-key ls-fn" data-k="del" aria-label="Löschen">${DEL_SVG}</button>`
-        : `<button class="ls-key" data-k="${k}">${k}</button>`).join('')}
-      </div>
-      ${mode === 'lock'
-        ? '<button class="ls-link" data-k="forgot">Code vergessen?</button>'
-        : '<button class="ls-link" data-k="cancel">Abbrechen</button>'}
-    </div>`;
-  document.body.appendChild(el);
-
-  const titleEl = el.querySelector('.ls-title'), msgEl = el.querySelector('.ls-msg');
-  const dotsEl = el.querySelector('.ls-dots'), dots = dotsEl.querySelectorAll('i');
-  let entry = '', first = null, busy = false, blockTimer = null;
-
-  const baseTitle = title || (mode === 'setup' ? 'Neuen Code festlegen' : 'Code eingeben');
-  titleEl.textContent = baseTitle;
-  const paint = () => dots.forEach((d, i) => d.classList.toggle('on', i < entry.length));
-  const fail = msg => {
-    entry = ''; paint(); msgEl.textContent = msg;
-    dotsEl.classList.remove('shake'); void dotsEl.offsetWidth; dotsEl.classList.add('shake');
-  };
-  const showBlock = () => {
-    clearInterval(blockTimer);
-    const tick = () => {
-      const s = blockedLeft();
-      el.querySelectorAll('.ls-key').forEach(b => b.disabled = s > 0);
-      if (s > 0) msgEl.textContent = `Zu viele Versuche — bitte ${s} s warten.`;
-      else { msgEl.textContent = ''; clearInterval(blockTimer); }
-    };
-    tick(); blockTimer = setInterval(tick, 1000);
-  };
-  const succeed = () => {
-    lockCfg.fails = 0; lockCfg.blockedUntil = 0; saveLock();
-    closePinScreen();
-    if (onDone) onDone();
-  };
-
-  async function submit() {
-    if (mode === 'setup') {
-      if (first == null) { first = entry; entry = ''; paint(); msgEl.textContent = ''; titleEl.textContent = 'Code wiederholen'; return; }
-      if (entry !== first) { first = null; titleEl.textContent = baseTitle; return fail('Die Codes stimmen nicht überein.'); }
-      const pin = entry;
-      closePinScreen();
-      return onDone && onDone(pin);
-    }
-    busy = true;
-    const ok = (await hashPin(entry, lockCfg.pinSalt)) === lockCfg.pinHash;
-    busy = false;
-    if (!el.isConnected) return;
-    if (ok) return succeed();
-    lockCfg.fails++;
-    /* alle 5 Fehlversuche eine Wartezeit: 30 s, 1 min, 2 min … höchstens 15 min */
-    if (lockCfg.fails % 5 === 0) lockCfg.blockedUntil = Date.now() + Math.min(30000 * 2 ** (lockCfg.fails / 5 - 1), 15 * 60000);
-    saveLock();
-    fail('Falscher Code.');
-    if (blockedLeft()) showBlock();
-  }
-  async function tryBio(auto) {
-    if (!useBio || busy || blockedLeft()) return;
-    busy = true;
-    try {
-      await bioVerify();
-      busy = false;
-      if (el.isConnected) succeed();
-    } catch (e) {
-      busy = false;
-      if (!auto && el.isConnected) msgEl.textContent = `${bioName()} hat nicht geklappt — bitte Code eingeben.`;
-    }
-  }
-  function press(k) {
-    if (k === 'cancel') { closePinScreen(); return onCancel && onCancel(); }
-    if (k === 'forgot') return forgotPin();
-    if (k === 'bio') return tryBio(false);
-    if (busy || blockedLeft()) return;
-    if (k === 'del') { entry = entry.slice(0, -1); return paint(); }
-    if (entry.length >= PIN_LEN) return;
-    entry += k; paint();
-    if (entry.length === PIN_LEN) setTimeout(submit, 90);   // letzten Punkt noch kurz zeigen
-  }
-
-  el.addEventListener('click', e => { const b = e.target.closest('[data-k]'); if (b && !b.disabled) press(b.dataset.k); });
-  /* Tastatur (Mac/Magic Keyboard); Capture, damit Escape nicht das Fenster darunter schließt */
-  const onKey = e => {
-    if (/^[0-9]$/.test(e.key)) press(e.key);
-    else if (e.key === 'Backspace') press('del');
-    else if (e.key === 'Escape' && mode !== 'lock') press('cancel');
-    else return;
-    e.preventDefault(); e.stopPropagation();
-  };
-  document.addEventListener('keydown', onKey, true);
-
-  pinBio = mode === 'lock' ? tryBio : null;
-  pinCleanup = () => {
-    clearInterval(blockTimer);
-    document.removeEventListener('keydown', onKey, true);
-    el.remove();
-    pinMode = null; pinBio = null;
-    setAppInert(false);
-    lastActivity = Date.now();
-  };
-
-  if (blockedLeft()) showBlock();
-  else if (autoBio) tryBio(true);
-}
-
-function lockNow(autoBio) {
-  if (!lockCfg.enabled || pinMode === 'lock') return;
-  pinScreen({ mode: 'lock', autoBio });
-}
-/* Code vor Änderungen an der Sperre bestätigen */
-function requirePin(title, onOk) {
-  if (!lockCfg.enabled) return onOk();
-  pinScreen({ mode: 'verify', title, onDone: onOk });
-}
-function forgotPin() {
-  if (!confirm('Ohne Code lässt sich Pult. nicht entsperren.\n\nPult. zurücksetzen? Dabei werden ALLE Kurse, Noten und Einstellungen in diesem Browser gelöscht. Ein Backup kannst du danach wieder einlesen.')) return;
-  try { localStorage.removeItem(STORE_KEY); localStorage.removeItem(LOCK_KEY); } catch (e) {}
-  location.reload();
-}
-
-/* ---------- Auslöser: Inaktivität, App verlassen, Neustart ----------
-   Gemessen wird mit Zeitstempeln statt mit Timern — iPadOS hält Timer im
-   Hintergrund an, die Uhr läuft aber weiter. */
-function idleExpired(since) {
-  return lockCfg.autoLock > 0 && Date.now() - since >= lockCfg.autoLock * 60000;
-}
-function noteActivity() {
-  if (pinMode === 'lock') return;
-  lastActivity = Date.now();
-  if (lockCfg.enabled && lastActivity - lockCfg.lastActive > 30000) { lockCfg.lastActive = lastActivity; saveLock(); }
-}
-['pointerdown', 'keydown', 'wheel'].forEach(ev => document.addEventListener(ev, noteActivity, { passive: true, capture: true }));
-setInterval(() => {
-  if (lockCfg.enabled && !document.hidden && idleExpired(lastActivity)) lockNow(false);
-}, 10000);
-document.addEventListener('visibilitychange', () => {
-  if (!lockCfg.enabled) return;
-  if (document.hidden) {
-    lockCfg.lastActive = lastActivity; saveLock();
-    /* noch vor dem Vorschaubild im App-Umschalter sperren */
-    if (lockCfg.autoLock === 0) lockNow(false);
-  } else if (pinMode === 'lock') {
-    if (pinBio) pinBio(true);
-  } else if (idleExpired(lastActivity)) {
-    lockNow(true);
-  }
-});
-function initLock() {
-  if (!lockCfg.enabled) return;
-  const stale = lockCfg.autoLock === 0 || idleExpired(lockCfg.lastActive || 0);
-  if (lockCfg.onStart || stale) lockNow(true);
-}
-
-/* Einstellungs-Karte „App-Sperre" */
-function lockSettingsHtml() {
-  if (!lockCfg.enabled) return `
-      <section class="set-card">
-        <h2>App-Sperre</h2>
-        <div class="field">
-          <button class="btn" id="lkSetup">Sperre einrichten</button>
-          <div class="hint">Schützt Pult. mit einem ${PIN_LEN}-stelligen Code, auf Wunsch zusätzlich mit ${bioName()}. Gesperrt wird per Knopf oben rechts, beim Öffnen der App oder nach einer Weile ohne Bedienung.</div>
-        </div>
-      </section>`;
-  return `
-      <section class="set-card">
-        <h2>App-Sperre</h2>
-        <div class="field">
-          <label>Automatisch sperren</label>
-          <select id="lkAuto">${AUTOLOCK_OPTIONS.map(([v, l]) => `<option value="${v}" ${lockCfg.autoLock === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
-          <div class="hint">Zeit im Hintergrund zählt mit — wer nach 10 Minuten in die App zurückkehrt, war 10 Minuten inaktiv.</div>
-        </div>
-        <div class="field">
-          <label>Beim Öffnen der App</label>
-          <select id="lkStart">
-            <option value="1" ${lockCfg.onStart ? 'selected' : ''}>Immer sperren</option>
-            <option value="0" ${lockCfg.onStart ? '' : 'selected'}>Nur sperren, wenn die Zeit oben abgelaufen ist</option>
-          </select>
-          <div class="hint">iPadOS beendet Web-Apps im Hintergrund oft von selbst — dann zählt das Zurückkehren als Öffnen.</div>
-        </div>
-        <div class="field">
-          <label>${bioName()}</label>
-          <select id="lkBio" disabled>
-            <option value="0" ${lockCfg.credId ? '' : 'selected'}>Aus — nur Code</option>
-            <option value="1" ${lockCfg.credId ? 'selected' : ''}>An — Code bleibt als Ausweichweg</option>
-          </select>
-          <div class="hint" id="lkBioHint">Wird geprüft …</div>
-        </div>
-        <div class="field">
-          <div class="set-buttons">
-            <button class="btn" id="lkNow">${LOCK_SVG} Jetzt sperren</button>
-            <button class="btn" id="lkChange">Code ändern</button>
-            <button class="btn danger" id="lkOff">Sperre ausschalten</button>
-          </div>
-          <div class="hint">Die Sperre ist ein Sichtschutz: Die Daten liegen weiterhin unverschlüsselt in diesem Browser. Wer den Code vergisst, kann Pult. nur zurücksetzen und ein Backup einlesen.</div>
-        </div>
-      </section>`;
-}
-function bindLockSettings() {
-  const $ = id => document.getElementById(id);
-  if (!lockCfg.enabled) {
-    $('lkSetup').onclick = () => pinScreen({ mode: 'setup', onDone: async pin => {
-      await setPin(pin);
-      lockCfg.enabled = true; lockCfg.lastActive = Date.now(); saveLock();
-      render(); toast('App-Sperre eingerichtet.');
-    }});
-    return;
-  }
-  $('lkAuto').onchange = e => { lockCfg.autoLock = Number(e.target.value); saveLock(); toast('Gespeichert.'); };
-  $('lkStart').onchange = e => { lockCfg.onStart = e.target.value === '1'; saveLock(); toast('Gespeichert.'); };
-  $('lkNow').onclick = () => lockNow(false);
-  $('lkChange').onclick = () => requirePin('Aktuellen Code eingeben', () =>
-    pinScreen({ mode: 'setup', onDone: async pin => { await setPin(pin); saveLock(); toast('Code geändert.'); } }));
-  $('lkOff').onclick = () => requirePin('Code eingeben, um die Sperre auszuschalten', () => {
-    lockCfg = LOCK_DEFAULT(); saveLock();
-    render(); toast('App-Sperre ausgeschaltet.');
-  });
-
-  const bioSel = $('lkBio'), bioHint = $('lkBioHint');
-  bioAvailable().then(ok => {
-    if (!bioSel.isConnected) return;
-    if (!bioSupported()) {
-      bioHint.textContent = window.isSecureContext
-        ? 'Dieser Browser unterstützt keine Passkeys (WebAuthn).'
-        : `Nur verfügbar, wenn Pult. über https geöffnet wird (oder über localhost) — gerade: ${location.protocol}//${location.host}`;
-      return;
-    }
-    /* Auch wenn das Gerät „nicht verfügbar" meldet, darf man es versuchen:
-       Verwaltete Geräte melden das teils, obwohl Touch ID eingerichtet ist —
-       der Fehler beim Einrichten sagt dann mehr. */
-    bioSel.disabled = false;
-    bioHint.textContent = ok
-      ? 'Beim Entsperren erscheint die Abfrage automatisch; das Symbol links neben der 0 startet sie erneut.'
-      : `Das Gerät meldet keine Entsperrung für Websites. Häufige Ursachen: kein Gerätecode, iCloud-Schlüsselbund aus oder auf verwalteten Geräten per Profil gesperrt. Einrichten kann trotzdem versucht werden.`;
-  });
-  bioSel.onchange = async () => {
-    if (bioSel.value === '0') { lockCfg.credId = ''; saveLock(); toast('Gespeichert.'); return; }
-    try { await bioRegister(); toast(`${bioName()} eingerichtet.`); }
-    catch (e) {
-      bioSel.value = '0';
-      toast(`${bioName()} konnte nicht eingerichtet werden.`);
-      bioHint.textContent = `Einrichten fehlgeschlagen: ${e.name || 'Fehler'}${e.message ? ' — ' + e.message : ''}`;
-    }
-  };
-}
-
-/* ============================================================
-   Einstellungen — eigene Seite
-   ------------------------------------------------------------
-   Jede Einstellung wird sofort gespeichert (kein Speichern-Knopf), damit
-   nichts verloren geht, wenn man die Seite einfach verlässt.
-   ============================================================ */
-function renderSettings() {
-  const m = data.meta;
-
-  app().innerHTML = `
-    <div class="page-head">
-      <div><h1>Einstellungen</h1><div class="sub">Änderungen werden sofort gespeichert.</div></div>
-    </div>
-
-    <div class="settings-page">
-      <section class="set-card">
-        <h2>Schuljahr</h2>
-        <div class="field"><label>Nächster Ferienbeginn</label>
-          <div class="row2">
-            <input id="mFerienDate" type="date" value="${m.ferienDatum||''}">
-            <input id="mFerienLabel" type="text" value="${esc(m.ferienLabel||'')}" placeholder="z. B. Sommerferien">
-          </div>
-        </div>
-        <div class="field"><label>Nächste Zeugniskonferenz</label><input id="mZeugnis" type="date" value="${m.zeugnisDatum||''}"></div>
-        <div class="field">
-          <label>Aktuelles Halbjahr</label>
-          <select id="mHalfYear">
-            <option value="auto" ${(m.halfYear||'auto')==='auto'?'selected':''}>Automatisch — 2. Halbjahr, sobald dort Noten stehen</option>
-            <option value="1" ${m.halfYear==='1'?'selected':''}>Immer 1. Halbjahr</option>
-            <option value="2" ${m.halfYear==='2'?'selected':''}>Immer 2. Halbjahr</option>
-          </select>
-          <div class="hint">Legt fest, welches Halbjahr beim Öffnen eines Kurses angezeigt wird. Umschalten geht im Kurs jederzeit.</div>
-        </div>
-      </section>
-
-      <section class="set-card">
-        <h2>Stundenplan</h2>
-        <div class="field">
-          <label>Rhythmus</label>
-          <select id="mAB">
-            <option value="0" ${abActive()?'':'selected'}>Eine Woche — jede Woche derselbe Plan</option>
-            <option value="1" ${abActive()?'selected':''}>Zwei Wochen — Woche A und Woche B im Wechsel</option>
-          </select>
-        </div>
-        <div class="field" id="mABWeekWrap" style="${abActive()?'':'display:none'}">
-          <label>Diese Woche ist</label>
-          <select id="mABWeek">
-            <option value="1" ${abActive()&&abWeekOf()===2?'':'selected'}>Woche A</option>
-            <option value="2" ${abActive()&&abWeekOf()===2?'selected':''}>Woche B</option>
-          </select>
-          <div class="hint">Danach wechseln A und B automatisch jede Woche. Bestehende Stunden gelten zunächst in beiden Wochen; im Plan kannst du sie einzeln auf A oder B setzen.</div>
-        </div>
-      </section>
-
-      <section class="set-card">
-        <h2>Notentabelle</h2>
-        <div class="field">
-          <label>Darstellung</label>
-          <select id="mLayout">
-            <option value="standard" ${(m.tableLayout||'standard')!=='invers'?'selected':''}>Standard (Noten links, Gesamt rechts)</option>
-            <option value="invers" ${m.tableLayout==='invers'?'selected':''}>Invertierte Liste (Gesamt & Neuestes zuerst links)</option>
-          </select>
-          <div class="hint">Invertiert: Name · Gesamt · HA · Sonstige · Ø schriftlich + schriftliche Noten · Ø mündlich + mündliche Noten — jeweils das Neueste ganz links.</div>
-        </div>
-      </section>
-
-      <section class="set-card">
-        <h2>Bewertungsraster</h2>
-        <div class="field">
-          <button class="btn" id="mRaster">Vorlagen verwalten</button>
-          <div class="hint">${(data.rubrics || []).length} ${(data.rubrics || []).length === 1 ? 'Vorlage' : 'Vorlagen'} — Kriterien, Stufen und Gewichtung für Einschätzungen, z. B. der Mitarbeit.</div>
-        </div>
-      </section>
-
-${lockSettingsHtml()}
-
-      <section class="set-card">
-        <h2>Notenprotokoll</h2>
-        <div class="field">
-          <button class="btn" id="mLog">Protokoll öffnen</button>
-          <div class="hint">Die letzten ${HISTORY_MAX} Änderungen an Noten — mit Datum, Uhrzeit und einzeln rückgängig zu machen. Eingetragen werden Noten, Bonuswerte, Klassenarbeits-Punkte, manuelle Überschreibungen und Löschungen, die Noten mitnehmen.</div>
-        </div>
-      </section>
-
-      <section class="set-card">
-        <h2>Datensicherung</h2>
-        <div class="field">
-          <div class="set-buttons">
-            <button class="btn" id="mBackupExport">Backup mit Namen</button>
-            <button class="btn" id="mBackupPseudo">Backup pseudonym</button>
-            <button class="btn" id="mBackupImport">Backup einlesen</button>
-            <input type="file" id="mBackupFile" accept="application/json,.json" hidden>
-          </div>
-          <div class="hint">${m.lastBackup ? 'Letztes Backup: '+fmtDateLong(m.lastBackup) : 'Noch kein Backup erstellt.'} Daten liegen nur in diesem Browser — regelmäßig sichern.</div>
-          <div class="hint"><b>Pseudonym:</b> Schülernamen werden durch Nummern ersetzt (alphabetisch nach Nachname, je Kurs) — zum Teilen/Ablegen ohne Namen. Freitext in Notizen, Todos und Terminen wird dabei <b>nicht</b> anonymisiert; zählt nicht als Namens-Sicherung. Das Notenprotokoll bleibt außen vor, weil dort Klarnamen stehen.</div>
-        </div>
-      </section>
-
-      <section class="set-card set-danger">
-        <h2>Alles löschen</h2>
-        <div class="field">
-          <button class="btn danger" id="mReset">Alle Daten zurücksetzen</button>
-          <div class="hint">Löscht sämtliche Kurse, Schüler:innen und Noten aus diesem Browser. Vorher ein Backup ziehen.</div>
-        </div>
-      </section>
-    </div>
-  `;
-
-  /* jede Änderung sofort sichern */
-  const saved = () => { save(); toast('Gespeichert.'); };
-  document.getElementById('mFerienDate').onchange = e => { m.ferienDatum = e.target.value; saved(); };
-  document.getElementById('mFerienLabel').onchange = e => { m.ferienLabel = e.target.value.trim() || 'Ferien'; saved(); };
-  document.getElementById('mZeugnis').onchange = e => { m.zeugnisDatum = e.target.value; saved(); };
-  document.getElementById('mHalfYear').onchange = e => { m.halfYear = e.target.value || 'auto'; saved(); };
-  document.getElementById('mLayout').onchange = e => { m.tableLayout = e.target.value || 'standard'; saved(); };
-
-  const abSel = document.getElementById('mAB'), abWrap = document.getElementById('mABWeekWrap'), abWeek = document.getElementById('mABWeek');
-  const applyAB = () => {
-    const wantAB = abSel.value === '1';
-    abWrap.style.display = wantAB ? '' : 'none';
-    data.timetable.abWeeks = wantAB;
-    if (wantAB) abSetCurrentWeek(Number(abWeek.value) || 1);
-    planWeek = null;                       // Stundenplan wieder auf die laufende Woche
-    saved();
-  };
-  abSel.onchange = applyAB;
-  abWeek.onchange = applyAB;
-
-  bindLockSettings();
-  document.getElementById('mLog').onclick = () => openHistory(null);
-  document.getElementById('mRaster').onclick = () => go({ name: 'rasterVorlagen' });
-  document.getElementById('mBackupExport').onclick = exportBackup;
-  document.getElementById('mBackupPseudo').onclick = exportBackupPseudonym;
-  const fileInput = document.getElementById('mBackupFile');
-  document.getElementById('mBackupImport').onclick = () => fileInput.click();
-  fileInput.onchange = () => { if (fileInput.files[0]) importBackupFile(fileInput.files[0]); };
-  document.getElementById('mReset').onclick = () => {
-    if (!confirm('Wirklich ALLE Daten löschen?')) return;
-    localStorage.removeItem(STORE_KEY); data = DEFAULT_DATA(); save(); go({ name: 'home' });
-  };
+/* ---------- Dauerhafter Speicher ----------
+   true = dauerhaft, false = nicht, null = Browser kennt die Funktion nicht */
+async function storagePersist(ask) {
+  if (!navigator.storage || !navigator.storage.persisted) return null;
+  try {
+    if (await navigator.storage.persisted()) return true;
+    return ask && navigator.storage.persist ? await navigator.storage.persist() : false;
+  } catch (e) { return false; }
 }
 
 /* ---------- Utilities ---------- */
@@ -4166,18 +3561,40 @@ function clamp(n, a, b) { return Math.max(a, Math.min(b, n)); }
 function fmtNum(n) { if (n == null || isNaN(n)) return '–'; return (Math.round(n * 10) / 10).toString().replace('.', ','); }
 function esc(s) { return String(s ?? '').replace(/[&<>"]/g, ch => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[ch])); }
 let toastTimer;
-function toast(msg) {
+/* action: { label, fn } — Knopf im Hinweis (z. B. „Rückgängig"), bleibt dann länger stehen */
+function toast(msg, action) {
   document.querySelectorAll('.toast').forEach(t => t.remove());
-  const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg;
+  const t = document.createElement('div'); t.className = 'toast';
+  const span = document.createElement('span'); span.textContent = msg; t.appendChild(span);
+  if (action) {
+    const b = document.createElement('button'); b.className = 'toast-btn'; b.textContent = action.label;
+    b.onclick = () => { t.remove(); action.fn(); };
+    t.appendChild(b);
+  }
   document.body.appendChild(t);
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.remove(), 2400);
+  toastTimer = setTimeout(() => t.remove(), action ? 5000 : 2400);
 }
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
 
 /* ---------- Start ---------- */
 data = load();
-migrateHaLog();
-migrateRaster();
-render();
+runMigrations();
+applyTheme();
+restoreRoute();
+try { render(); }
+catch (e) {
+  /* eine gemerkte Seite, die nicht mehr geht, darf den Start nicht blockieren */
+  console.error(e);
+  route = { name: 'home', courseId: null, hy: '1', view: 'simpel' }; navStack = [];
+  render();
+}
 initLock();
+/* installierte Web-App: Speicher als dauerhaft anfragen (sonst darf der Browser bei Platzmangel räumen) */
+if (window.matchMedia('(display-mode: standalone)').matches || navigator.standalone) storagePersist(true);
+dailySnapshot();
+loadAppVersion().then(() => {
+  if (SETTINGS_SUBPAGES.includes(route.name)) render();
+  else renderTopbarRight();
+  dailyUpdateCheck();
+});
