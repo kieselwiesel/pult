@@ -1,7 +1,38 @@
 {
-  "version": "1.0.0",
-  "date": "2026-10-10",
+  "version": "1.0.4",
+  "date": "2026-10-11",
   "changelog": [
+    {
+      "version": "1.0.4",
+      "date": "2026-10-11",
+      "changes": [
+        "Notentabelle: Spaltenköpfe in drei Zeilen — Name, dann Art und Eigenschaften (KA, Raster, zählt nicht, Gewichtung), dann Datum"
+      ]
+    },
+    {
+      "version": "1.0.3",
+      "date": "2026-10-11",
+      "changes": [
+        "Druckansicht: nur noch ein Knopf „PDF / Drucken“ — erstellt das PDF und öffnet das Teilen-Menü mit Drucken, In Dateien sichern, AirDrop …",
+        "Druckansicht, Fenster, Sperrbildschirm und Vollbild-Ansichten rücken oben noch etwas weiter nach unten (iPadOS-27-Verlauf)"
+      ]
+    },
+    {
+      "version": "1.0.2",
+      "date": "2026-10-11",
+      "changes": [
+        "Druckansicht: „PDF“ erstellt jetzt direkt ein PDF und öffnet das Teilen-Menü (Drucken, In Dateien sichern, AirDrop …) — ersetzt die bisherige HTML-Datei",
+        "„Drucken“ funktioniert jetzt auch in der Web-App auf dem iPad (über das PDF und das Teilen-Menü)",
+        "Druckansicht, Fenster, Sperrbildschirm und Vollbild-Ansichten rücken oben etwas nach unten, damit der Verlauf von iPadOS 27 nichts verdeckt"
+      ]
+    },
+    {
+      "version": "1.0.1",
+      "date": "2026-10-11",
+      "changes": [
+        "Bewertungsbogen bei Klassenarbeiten und Tests: neben der Prozentgrenze steht jetzt die Rohpunktzahl (exakt und auf halbe Punkte aufgerundet), knappe Grenzen sind rot markiert"
+      ]
+    },
     {
       "version": "1.0.0",
       "date": "2026-10-10",

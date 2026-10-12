@@ -802,6 +802,22 @@ function schemeGrade(scheme, percent) {
   for (const row of scheme) if (percent >= row.minPercent) return row.points;
   return 0;
 }
+/* Punktgrenze einer Notenstufe: exakt (2 Nachkommastellen) und auf halbe
+   Punkte aufgerundet — so viele Punkte braucht es tatsächlich für die Note.
+   „Knapp" heißt: die exakte Grenze liegt nur wenig über einer halben Stufe,
+   die Aufrundung verschenkt also fast einen halben Punkt (40,1 → 40,5). */
+const SCHEME_TIGHT = 0.2;
+function schemePointsHtml(pct, maxTotal) {
+  if (!maxTotal || !pct) return '<span class="sr-pts">–</span>';
+  const exact = maxTotal * pct / 100;
+  const up = Math.ceil(exact * 2 - 1e-9) / 2;
+  const over = exact - (up - 0.5);
+  const tight = up !== exact && over > 1e-9 && over <= SCHEME_TIGHT + 1e-9;
+  const fmt = n => n.toFixed(2).replace('.', ',');
+  const fmtHalf = n => String(n).replace('.', ',');
+  return `<span class="sr-pts${tight ? ' tight' : ''}" title="${tight ? 'Knapp: die Grenze liegt nur wenig über einer halben Stufe — ggf. Prozentwert anpassen.' : ''}">
+    ${fmt(exact)} → <b>${fmtHalf(up)}</b></span>`;
+}
 function kaTotals(col, sId) {
   const pts = (data.kaPoints[sId] || {})[col.id] || {};
   const tasks = col.ka.tasks;
@@ -1874,6 +1890,7 @@ function renderKaBewertung(c, col) {
       <span class="sr-note">${pad2(r.points)}<small>${NOTE_MAP[r.points]}</small></span>
       <input type="range" min="0" max="100" value="${r.minPercent}" class="sr-range">
       <input type="number" min="0" max="100" value="${r.minPercent}" class="sr-pct">
+      <span class="sr-pts-cell">${schemePointsHtml(r.minPercent, maxTotal)}</span>
     </div>`).join('');
 
   body.innerHTML = `
@@ -1913,8 +1930,9 @@ function renderKaBewertung(c, col) {
       <div>
         <div class="calc-block">
           <h3>Bewertungsbogen — ab wie viel Prozent welche Note</h3>
-          <div class="scheme-head"><span>Punkte</span><span>ab Prozent</span><span>%</span></div>
+          <div class="scheme-head"><span>Punkte</span><span>ab Prozent</span><span>%</span><span>ab Rohpunkten</span></div>
           <div id="schemeList">${schemeRows}</div>
+          <div class="hint">Rohpunkte: exakte Grenze → auf halbe Punkte aufgerundet. <span class="sr-pts tight">Rot</span> = knapp über einer halben Stufe, ggf. Prozentwert anpassen.</div>
           <button class="btn small" id="kaStdScheme" style="margin-top:10px">Standardvorschlag einsetzen</button>
         </div>
       </div>
@@ -1927,6 +1945,13 @@ function renderKaBewertung(c, col) {
   `;
 
   const recompute = () => { syncKaGrades(c, col); save(); };
+  /* Rohpunkt-Grenzen live nachziehen (Prozent oder Aufgaben-Maxima geändert) */
+  const refreshSchemePts = () => {
+    const total = col.ka.tasks.reduce((a, t) => a + (Number(t.max) || 0), 0);
+    body.querySelectorAll('.scheme-row').forEach(row => {
+      row.querySelector('.sr-pts-cell').innerHTML = schemePointsHtml(col.ka.scheme[+row.dataset.i].minPercent, total);
+    });
+  };
 
   document.getElementById('kaLabel').oninput = e => { col.label = e.target.value; save(); };
   document.getElementById('kaDate').onchange = e => { col.date = e.target.value; save(); };
@@ -1975,7 +2000,7 @@ function renderKaBewertung(c, col) {
   body.querySelectorAll('.task-edit').forEach(row => {
     const id = row.dataset.task; const task = col.ka.tasks.find(t => t.id === id);
     row.querySelector('.te-label').oninput = e => { task.label = e.target.value; save(); };
-    row.querySelector('.te-max').oninput = e => { task.max = clamp(parseFloat(e.target.value) || 0, 0, 999); recompute(); };
+    row.querySelector('.te-max').oninput = e => { task.max = clamp(parseFloat(e.target.value) || 0, 0, 999); recompute(); refreshSchemePts(); };
     row.querySelector('.te-del').onclick = () => {
       col.ka.tasks = col.ka.tasks.filter(t => t.id !== id);
       Object.values(data.kaPoints).forEach(byCol => { if (byCol[col.id]) delete byCol[col.id][id]; });
@@ -1991,7 +2016,7 @@ function renderKaBewertung(c, col) {
   body.querySelectorAll('.scheme-row').forEach(row => {
     const i = +row.dataset.i;
     const range = row.querySelector('.sr-range'), pct = row.querySelector('.sr-pct');
-    const setVal = v => { v = clamp(Math.round(v), 0, 100); col.ka.scheme[i].minPercent = v; range.value = v; pct.value = v; recompute(); };
+    const setVal = v => { v = clamp(Math.round(v), 0, 100); col.ka.scheme[i].minPercent = v; range.value = v; pct.value = v; recompute(); refreshSchemePts(); };
     range.oninput = () => setVal(+range.value);
     pct.oninput = () => setVal(+pct.value);
   });
@@ -2123,11 +2148,16 @@ function renderTable(c) {
   const muendInv = muendCols.slice().sort(byNewest);
   const allSonst = hy.sonstige.slice();
 
-  const headCols = (cols, grpClass) => cols.map(col => `
+  /* Kopf in drei Zeilen: Name · Art und Eigenschaften (Plaketten) · Datum */
+  const headCols = (cols, grpClass) => cols.map(col => {
+    const tags = (kaPill(col) + rasterPill(col) + weightPill(col)).trim();
+    return `
     <th class="colhead ${grpClass}" data-col="${col.id}">
-      <span class="ch-label">${esc(col.label)}${kaPill(col)}${rasterPill(col)}${weightPill(col)}</span>
+      <span class="ch-label">${esc(col.label)}</span>
+      ${tags ? `<span class="ch-tags">${tags}</span>` : ''}
       ${col.date ? `<span class="ch-date">${fmtDate(col.date)}</span>` : ''}
-    </th>`).join('');
+    </th>`;
+  }).join('');
   const headSonst = list => list.map(so => `<th class="grp-sonst">${esc(so.label)}<span class="ch-date">${so.percent}%</span></th>`).join('');
 
   const stickyGesamt = isGesamt && route.hy !== '2';   // Standard: Gesamt ist letzte Spalte (HJ1)

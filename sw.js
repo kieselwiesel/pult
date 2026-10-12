@@ -12,7 +12,7 @@
    Veröffentlichen: VERSION hier UND in version.json erhöhen (samt Changelog). */
 'use strict';
 
-const VERSION = '1.0.0';
+const VERSION = '1.0.4';
 const CACHE = 'pult-' + VERSION;
 const FLAGS = 'pult-flags';          // Freigabe für ein Update (von der App gesetzt)
 const ASSETS = [
@@ -21,6 +21,8 @@ const ASSETS = [
   './version.json',
   './css/pult.css',
   './js/print.js',
+  './js/vendor/html2canvas.min.js',
+  './js/vendor/jspdf.umd.min.js',
   './js/raster.js',
   './js/ausdrucke.js',
   './js/werkzeuge.js',
