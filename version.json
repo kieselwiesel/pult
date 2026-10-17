@@ -1,7 +1,16 @@
 {
-  "version": "1.0.4",
-  "date": "2026-10-11",
+  "version": "1.0.5",
+  "date": "2026-10-17",
   "changelog": [
+    {
+      "version": "1.0.5",
+      "date": "2026-10-17",
+      "changes": [
+        "Zwischenstand: wahlweise Gesamtstand oder mündlichen Stand einfrieren",
+        "Zwischenstand: Anzeige als Dezimalwert oder als Punkte bzw. Tendenznote (je nach Skala des Kurses)",
+        "Zwischenstand: einzelne Werte per Klick anpassbar, der ursprüngliche Wert bleibt klein in Klammern sichtbar"
+      ]
+    },
     {
       "version": "1.0.4",
       "date": "2026-10-11",

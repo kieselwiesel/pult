@@ -254,6 +254,12 @@ td.ha-cell .cell { min-width: 56px; height: 46px; display:flex; align-items:cent
 .dt-info .dt-lbl { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-faint); margin-bottom: 2px; }
 .dt-info b { font-size: 15px; font-variant-numeric: tabular-nums; }
 td.prev-cell .cell { min-width: 54px; height: 46px; display:flex; align-items:center; justify-content:center; font-weight:650; color: var(--ink-soft); }
+td.zw-cell { cursor: pointer; }
+td.zw-cell:hover .cell { background: var(--line-soft); }
+td.zw-cell .cell { flex-direction: column; line-height: 1.1; }
+td.zw-cell .cell.manual { color: var(--ink); }
+td.zw-cell .cell .calc { font-size: 10px; font-weight: 600; opacity: .7; }
+td.zw-cell .cell.manual .pt::after { content: "*"; font-size: 12px; vertical-align: super; }
 
 th.col-name, td.col-name {
   position: sticky; left: 0; z-index: 3;
@@ -309,8 +315,8 @@ th.addcol { padding: 4px !important; }
 th.colhead { cursor: pointer; }
 th.colhead:hover { background: #e9edf3 !important; }
 th.colhead .ch-label { display:block; font-weight: 700; color: var(--ink); }
-th.colhead .ch-tags { display: block; line-height: 1.2; margin-top: 2px; white-space: nowrap; }
-th.colhead .ch-tags .pill { margin: 0; }
+th.colhead .ch-tags, th.zw-head .ch-tags { display: block; line-height: 1.2; margin-top: 2px; white-space: nowrap; }
+th.colhead .ch-tags .pill, th.zw-head .ch-tags .pill { margin: 0; }
 th.colhead .ch-date { display:block; font-size: 11px; color: var(--ink-faint); font-weight: 500; margin-top: 1px; }
 
 .empty-state { text-align: center; padding: 48px 20px; color: var(--ink-soft); }

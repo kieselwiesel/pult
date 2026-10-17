@@ -1678,40 +1678,73 @@ function renderCourse() {
 /* ============================================================
    Zwischenstand — eingefrorener Notenstand (nicht in Berechnung)
    ============================================================ */
-function snapshotValues(c, hyKey) {
+/* col.source: 'gesamt' | 'muendlich' — welcher Stand eingefroren wird
+   col.fmt:    'dezimal' (Kommawert) | 'note' (Punkte bzw. Tendenznote, je nach Kurs-Skala)
+   col.overrides: { sId: Punkte } — von Hand angepasst, Original bleibt in col.values */
+function snapshotValues(c, hyKey, source) {
   const v = {};
-  c.students.forEach(s => { const g = effGesamt(c, hyKey, s.id).value; if (g != null) v[s.id] = g; });
+  c.students.forEach(s => {
+    const g = source === 'muendlich' ? computeHalf(c, hyKey, s.id).mAvg : effGesamt(c, hyKey, s.id).value;
+    if (g != null) v[s.id] = g;
+  });
   return v;
+}
+function zwSourceName(col) { return col.source === 'muendlich' ? 'mündlichen Stand' : 'Gesamtstand'; }
+function zwSeg(id, items, cur) {
+  return `<div class="seg" id="${id}" style="width:100%">${items.map(([v, l]) =>
+    `<button type="button" data-v="${v}" style="flex:1" class="${v===cur?'active':''}">${l}</button>`).join('')}</div>`;
+}
+function bindZwSeg(id, onPick) {
+  document.querySelectorAll(`#${id} button`).forEach(b => b.onclick = () => {
+    document.querySelectorAll(`#${id} button`).forEach(x => x.classList.toggle('active', x === b));
+    onPick(b.dataset.v);
+  });
+}
+function zwFmtField(c, cur) {
+  const noteLbl = c.scale === 'noten' ? 'Tendenznote (z. B. 2-)' : 'Punkte (z. B. 11)';
+  return `<div class="field"><label>Anzeige</label>
+    ${zwSeg('zwFmt', [['dezimal', 'Dezimal (z. B. ' + (c.scale === 'noten' ? '2,3' : '10,7') + ')'], ['note', noteLbl]], cur)}
+    <div class="hint">„${c.scale === 'noten' ? 'Tendenznote' : 'Punkte'}“ richtet sich nach der eingestellten Skala des Kurses.</div></div>`;
 }
 function createZwischenstand(c) {
   const hyKey = route.hy;
+  let source = 'gesamt', fmt = 'dezimal';
   modal('Zwischenstand einfügen', `
-    <div class="notice">Friert den aktuellen Gesamtstand (${hyKey}. Halbjahr) zum gewählten Datum ein — z. B. als Leistungsrückmeldung vor den Ferien. Fließt <b>nicht</b> in die Notenberechnung ein.</div>
+    <div class="notice">Friert den aktuellen Stand (${hyKey}. Halbjahr) zum gewählten Datum ein — z. B. als Leistungsrückmeldung vor den Ferien. Fließt <b>nicht</b> in die Notenberechnung ein.</div>
     <div class="row2">
       <div class="field"><label>Bezeichnung</label><input id="zwLabel" type="text" value="Zwischenstand" placeholder="z. B. vor Osterferien"></div>
       <div class="field"><label>Datum</label><input id="zwDate" type="date" value="${todayISO()}"></div>
     </div>
+    <div class="field"><label>Was wird eingefroren?</label>
+      ${zwSeg('zwSource', [['gesamt', 'Gesamtstand'], ['muendlich', 'Mündlicher Stand']], source)}</div>
+    ${zwFmtField(c, fmt)}
   `, [
     { label: 'Abbrechen', onClick: closeModal },
     { label: 'Einfügen', cls: 'primary', onClick: () => {
-      const col = { id: uid(), type: 'zwischenstand', label: val('zwLabel').trim() || 'Zwischenstand', date: val('zwDate'), values: snapshotValues(c, hyKey) };
+      const col = { id: uid(), type: 'zwischenstand', source, fmt, label: val('zwLabel').trim() || 'Zwischenstand', date: val('zwDate'), values: snapshotValues(c, hyKey, source), overrides: {} };
       c.halfYears[hyKey].columns.push(col);
       save(); closeModal(); renderCourse();
       toast('Zwischenstand eingefroren.');
     }},
   ]);
+  bindZwSeg('zwSource', v => source = v);
+  bindZwSeg('zwFmt', v => fmt = v);
 }
 function openZwischenstand(c, colId) {
   const hy = c.halfYears[route.hy];
   const col = hy.columns.find(x => x.id === colId);
   if (!col) return;
+  let fmt = col.fmt || 'dezimal';
+  const nOver = Object.keys(col.overrides || {}).length;
   modal('Zwischenstand', `
-    <div class="notice">Eingefrorener Gesamtstand vom ${col.date?fmtDateLong(col.date):'—'}. Nur Anzeige, ändert die Noten nicht.</div>
+    <div class="notice">Eingefrorener ${zwSourceName(col)} vom ${col.date?fmtDateLong(col.date):'—'}. Nur Anzeige, ändert die Noten nicht. Einzelne Werte lassen sich mit Klick auf die Zelle anpassen.</div>
     <div class="row2">
       <div class="field"><label>Bezeichnung</label><input id="zwLabel" type="text" value="${esc(col.label||'')}"></div>
       <div class="field"><label>Datum</label><input id="zwDate" type="date" value="${col.date||''}"></div>
     </div>
+    ${zwFmtField(c, fmt)}
     <button class="btn small" id="zwRefresh" style="margin-top:4px">Werte auf heutigen Stand aktualisieren</button>
+    ${nOver ? `<button class="btn small" id="zwReset" style="margin-top:4px">Anpassungen verwerfen (${nOver})</button>` : ''}
   `, [
     { label: 'Löschen', cls: 'danger', onClick: () => {
       hy.columns = hy.columns.filter(x => x.id !== col.id);
@@ -1719,13 +1752,30 @@ function openZwischenstand(c, colId) {
     }},
     { label: 'Abbrechen', onClick: closeModal },
     { label: 'Speichern', cls: 'primary', onClick: () => {
-      col.label = val('zwLabel').trim() || 'Zwischenstand'; col.date = val('zwDate');
+      col.label = val('zwLabel').trim() || 'Zwischenstand'; col.date = val('zwDate'); col.fmt = fmt;
       save(); closeModal(); renderCourse();
     }},
   ]);
+  bindZwSeg('zwFmt', v => fmt = v);
   document.getElementById('zwRefresh').onclick = () => {
-    col.values = snapshotValues(c, route.hy); save(); toast('Zwischenstand aktualisiert.');
+    col.values = snapshotValues(c, route.hy, col.source); save(); renderTable(c); toast('Zwischenstand aktualisiert.');
   };
+  const rb = document.getElementById('zwReset');
+  if (rb) rb.onclick = () => { col.overrides = {}; rb.remove(); save(); renderTable(c); toast('Anpassungen verworfen.'); };
+}
+/* Einzelwert eines Zwischenstands von Hand anpassen; das Original bleibt erhalten */
+function openZwCell(c, sId, colId) {
+  const s = c.students.find(x => x.id === sId);
+  const col = c.halfYears[route.hy].columns.find(x => x.id === colId);
+  if (!s || !col) return;
+  const orig = (col.values || {})[sId];
+  const over = (col.overrides || {})[sId];
+  const cur = over != null ? over : orig != null ? Math.round(orig) : null;
+  openPad(`${esc(s.firstName)} ${esc(s.lastName||'')} — ${esc(col.label||'Zwischenstand')}`, cur, v => {
+    col.overrides = col.overrides || {};
+    if (v == null) delete col.overrides[sId]; else col.overrides[sId] = v;
+    save(); renderTable(c);
+  }, c.scale, 'Anpassung entfernen');
 }
 
 /* Schüler-Detailseite: siehe schueler.js */
@@ -2161,7 +2211,9 @@ function renderTable(c) {
   const headSonst = list => list.map(so => `<th class="grp-sonst">${esc(so.label)}<span class="ch-date">${so.percent}%</span></th>`).join('');
 
   const stickyGesamt = isGesamt && route.hy !== '2';   // Standard: Gesamt ist letzte Spalte (HJ1)
-  const zwHead = zwCols.map(col => `<th class="grp-prev zw-head" data-zw="${col.id}">${esc(col.label||'Zwischenstand')}<span class="ch-date">${fmtDate(col.date)}</span></th>`).join('');
+  const zwMCols = zwCols.filter(x => x.source === 'muendlich');
+  const zwHeadOf = cols => cols.map(col => `<th class="grp-prev zw-head" data-zw="${col.id}">${esc(col.label||'Zwischenstand')}${col.source==='muendlich'?'<span class="ch-tags"><span class="pill">mündl.</span></span>':''}<span class="ch-date">${fmtDate(col.date)}</span></th>`).join('');
+  const zwHead = zwHeadOf(zwCols);
   const haHead = `<th class="grp-ha ha-head" title="Hausaufgaben: gemacht / fehlt">HA / Fehlt</th>`;
 
   let thead = `<tr><th class="col-name">Schüler:in</th>`;
@@ -2197,10 +2249,11 @@ function renderTable(c) {
     thead += headSonst(sonstM);
     thead += `<th class="grp-muend">Ø mündl.</th>`;
     thead += headCols(muendInv, 'grp-muend');
+    thead += zwHeadOf(zwMCols);
   } else {
     if (route.hy === '2') thead += `<th class="grp-prev">Ges. HJ1</th>`;
     if (showS) { thead += headCols(schriftCols, 'grp-schrift'); thead += `<th class="grp-schrift">Ø schr.</th>`; thead += headSonst(sonstS); }
-    if (showM) { thead += headCols(muendCols, 'grp-muend'); thead += `<th class="grp-muend">Ø mündl.</th>`; thead += headSonst(sonstM); }
+    if (showM) { thead += headCols(muendCols, 'grp-muend'); thead += `<th class="grp-muend">Ø mündl.</th>`; thead += headSonst(sonstM); if (!isGesamt) thead += zwHeadOf(zwMCols); }
     if (isGesamt) {
       thead += headSonst(sonstA);
       if (showHA) thead += haHead;
@@ -2238,7 +2291,15 @@ function renderTable(c) {
     const blind = blindSpot(c, route.hy, s.id) ? '<span class="blind-dot" title="keine aktuelle mündliche Note"></span>' : '';
     const gradeTd = col => `<td class="grade-cell" data-s="${s.id}" data-col="${col.id}">${cell(gr[col.id])}</td>`;
     const haTd = () => { const hc = haCounts(c, s.id); return `<td class="ha-cell"><div class="cell">${hc.gemacht} <span style="color:${hc.nicht?'var(--g-fail)':'var(--ink-faint)'}">/ ${hc.nicht}</span></div></td>`; };
-    const zwTd = col => `<td class="prev-cell"><div class="cell">${fmtGrade((col.values||{})[s.id], scale, true)}</div></td>`;
+    const zwTd = col => {
+      const avg = (col.fmt || 'dezimal') === 'dezimal';
+      const orig = (col.values || {})[s.id], over = (col.overrides || {})[s.id];
+      const adj = over != null;
+      const shown = adj ? over : orig;
+      return `<td class="prev-cell zw-cell" data-s="${s.id}" data-zw="${col.id}"><div class="cell ${adj?'manual':''}">
+        <span class="pt">${fmtGrade(shown, scale, avg)}</span>
+        ${adj && orig != null ? `<span class="calc">(${fmtGrade(orig, scale, avg)})</span>` : ''}</div></td>`;
+    };
     let tr = `<tr class="${studentActive(s)?'':'inactive'}"><td class="col-name"><span class="sname sname-link" data-student="${s.id}">${esc(s.firstName)} ${esc(s.lastName||'')}${blind}${s.exit?' <small>(aus)</small>':''}${infoBadge(s)}</span>${spark}</td>`;
     if (isSimpel) {
       if (inverted) {
@@ -2272,13 +2333,14 @@ function renderTable(c) {
       sonstM.forEach(so => tr += sonstCell(s.id, so.id));
       tr += `<td class="avg">${avgCell(comp.mAvg)}</td>`;
       muendInv.forEach(col => tr += gradeTd(col));
+      zwMCols.forEach(col => tr += zwTd(col));
     } else {
       if (route.hy === '2') {
         const g1 = effGesamt(c, '1', s.id).value;
         tr += `<td class="prev-cell"><div class="cell">${fmtGrade(g1, scale, true)}</div></td>`;
       }
       if (showS) { schriftCols.forEach(col => tr += gradeTd(col)); tr += `<td class="avg">${avgCell(comp.wAvg)}</td>`; sonstS.forEach(so => tr += sonstCell(s.id, so.id)); }
-      if (showM) { muendCols.forEach(col => tr += gradeTd(col)); tr += `<td class="avg">${avgCell(comp.mAvg)}</td>`; sonstM.forEach(so => tr += sonstCell(s.id, so.id)); }
+      if (showM) { muendCols.forEach(col => tr += gradeTd(col)); tr += `<td class="avg">${avgCell(comp.mAvg)}</td>`; sonstM.forEach(so => tr += sonstCell(s.id, so.id)); if (!isGesamt) zwMCols.forEach(col => tr += zwTd(col)); }
       if (isGesamt) {
         sonstA.forEach(so => tr += sonstCell(s.id, so.id));
         if (showHA) tr += haTd();
@@ -2323,6 +2385,8 @@ function renderTable(c) {
   bindInfoBadges(host, c);
   host.querySelectorAll('.zw-head').forEach(th =>
     th.onclick = () => openZwischenstand(c, th.dataset.zw));
+  host.querySelectorAll('td.zw-cell').forEach(td =>
+    td.onclick = () => openZwCell(c, td.dataset.s, td.dataset.zw));
 
   function sonstCell(sId, soId) {
     const v = (data.sonstigeValues[sId] || {})[soId];
@@ -2334,7 +2398,7 @@ function renderTable(c) {
 /* ============================================================
    Punkte-Pad (generisch)
    ============================================================ */
-function openPad(title, current, onPick, scale) {
+function openPad(title, current, onPick, scale, clearLabel) {
   scale = scale || 'punkte';
   let pad = '';
   for (let p = 15; p >= 0; p--) {
@@ -2345,7 +2409,7 @@ function openPad(title, current, onPick, scale) {
     const sub = scale === 'noten' ? `${pad2(p)} P.` : NOTE_MAP[p];
     pad += `<button data-p="${p}" class="${current===p?'sel':''}" style="background:${bg};color:${fg}">${big}<span class="nt" style="color:${fg}">${sub}</span></button>`;
   }
-  modal(title, `<div class="gradepad">${pad}<button class="gradepad-clear btn" data-p="clear">Note entfernen</button></div>`,
+  modal(title, `<div class="gradepad">${pad}<button class="gradepad-clear btn" data-p="clear">${clearLabel || 'Note entfernen'}</button></div>`,
     [{ label: 'Fertig', cls: 'primary', onClick: closeModal }]);
   document.querySelectorAll('.gradepad button').forEach(b => b.onclick = () => {
     onPick(b.dataset.p === 'clear' ? null : parseInt(b.dataset.p));
