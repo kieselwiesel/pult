@@ -1,7 +1,15 @@
 {
-  "version": "1.0.5",
-  "date": "2026-10-17",
+  "version": "1.0.6",
+  "date": "2026-10-21",
   "changelog": [
+    {
+      "version": "1.0.6",
+      "date": "2026-10-21",
+      "changes": [
+        "Bewertungsraster: Einschätzung kann statt n-fach auch mit festem Anteil an der Gesamtnote zählen",
+        "Bewertungsraster: private Notiz pro Schüler:in — erscheint in keinem Ausdruck"
+      ]
+    },
     {
       "version": "1.0.5",
       "date": "2026-10-17",

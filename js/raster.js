@@ -8,7 +8,9 @@
    Einschätzung: eine Notenspalte mit `col.raster`. Beim Anlegen wird die
    Vorlage hineinkopiert (`def`) — spätere Änderungen an der Vorlage
    verändern also keine fertigen Einschätzungen. Pro Schüler:in:
-     ratings[sId] = { v: { critId: punkte }, self: { critId: levelId }, comment }
+     ratings[sId] = { v: { critId: punkte }, self: { critId: levelId }, comment, note }
+   `comment` ist die Rückmeldung (wird gedruckt), `note` eine private Notiz
+   der Lehrkraft (erscheint in keinem Ausdruck).
    Aus den Punkten ergibt sich gewichtet ein Notenvorschlag. Solange die
    Note nicht abweichend festgelegt ist (manual[sId]), folgt die
    Notenspalte dem Vorschlag.
@@ -357,7 +359,7 @@ function renderRasterListe(c, col) {
     }).join('');
     const selfN = Object.keys(rt.self || {}).length;
     return `<tr class="rs-row ${studentActive(s) ? '' : 'inactive'}" data-s="${s.id}">
-      <td class="col-name"><span class="sname">${esc(studentName(s))}${infoBadge(s)}${rt.comment ? ' <span class="rs-mark" title="Rückmeldung vorhanden">✎</span>' : ''}${selfN ? ' <span class="rs-mark" title="Selbsteinschätzung erfasst">S</span>' : ''}</span></td>
+      <td class="col-name"><span class="sname">${esc(studentName(s))}${infoBadge(s)}${rt.comment ? ' <span class="rs-mark" title="Rückmeldung vorhanden">✎</span>' : ''}${(rt.note || '').trim() ? ' <span class="rs-mark" title="Notiz vorhanden">N</span>' : ''}${selfN ? ' <span class="rs-mark" title="Selbsteinschätzung erfasst">S</span>' : ''}</span></td>
       ${cells}
       <td class="avg"><div class="cell">${sug.raw == null ? '–' : fmtGrade(sug.raw, scale, true)}</div></td>
       <td class="ka-note" title="${manual ? 'abweichend festgelegt' : 'folgt dem Vorschlag'}">${kaNoteCell(col.noCount ? null : g, scale)}${manual ? '<span class="rs-manual">*</span>' : ''}</td>
@@ -462,6 +464,9 @@ function renderRasterBogen(c, col) {
     <div class="field" style="margin-top:14px"><label>Rückmeldung an ${esc(s.firstName)} <span class="cs-sub">— erscheint im Ausdruck</span></label>
       <textarea id="rsComment" placeholder="z. B. Du bringst dich regelmäßig ein. Achte noch stärker auf …">${esc(rt.comment || '')}</textarea>
     </div>
+    <div class="field"><label>Notiz <span class="cs-sub">— Wird nicht gedruckt.</span></label>
+      <textarea id="rsNote" placeholder="z. B. Beobachtung, Begründung der Note, Absprache …">${esc(rt.note || '')}</textarea>
+    </div>
 
     <div class="toolbar">
       <button class="btn small danger" id="rsClear">Bogen leeren</button>
@@ -506,9 +511,10 @@ function renderRasterBogen(c, col) {
     go({ rTab: 'liste' }); toast('Alle durch.');
   };
   document.getElementById('rsComment').oninput = e => { rasterEnsureRating(col, s.id).comment = e.target.value; save(); };
+  document.getElementById('rsNote').oninput = e => { rasterEnsureRating(col, s.id).note = e.target.value; save(); };
   document.getElementById('rsPrintOne').onclick = () => openRasterPrint(c, col, s.id);
   document.getElementById('rsClear').onclick = () => rasterConfirm('Bogen leeren?',
-    `<p>Kreuze, Selbsteinschätzung und Rückmeldung von <b>${esc(studentName(s))}</b> in dieser Einschätzung werden entfernt.</p>`,
+    `<p>Kreuze, Selbsteinschätzung, Rückmeldung und Notiz von <b>${esc(studentName(s))}</b> in dieser Einschätzung werden entfernt.</p>`,
     'Leeren', () => {
       delete r.ratings[s.id];
       if (r.manual) delete r.manual[s.id];
@@ -531,6 +537,9 @@ function openRasterSettings(c, col) {
   const r = col.raster, def = r.def;
   const tpl = (data.rubrics || []).find(t => t.id === r.sourceId);
   let count = col.noCount ? 'none' : col.type;
+  const fixedPct = colPct(col);
+  const wMode = fixedPct != null ? 'pct' : 'factor';
+  let wPick = wMode;
   const critRows = def.criteria.map(cr => `
     <div class="rs-w-row"><span>${esc(cr.label)}</span>
       <input type="number" min="0" max="100" step="1" data-w="${cr.id}" value="${fmtNum(cr.weight).replace(',', '.')}"><span class="cs-sub">%</span></div>`).join('');
@@ -546,9 +555,19 @@ function openRasterSettings(c, col) {
         <button type="button" data-v="none" style="flex:1" class="${count === 'none' ? 'active' : ''}">Gar nicht</button>
       </div>
     </div>
-    <div class="field" id="reFactorWrap" style="${count === 'none' ? 'display:none' : ''}"><label>Zählt n-fach</label>
-      <input id="reFactor" type="number" min="0.1" max="20" step="0.5" value="${fmtNum(colFactor(col)).replace(',', '.')}">
-      <div class="hint">Standard 1 — wiegt wie eine einfache Note desselben Bereichs.</div>
+    <div class="field" id="reWeightWrap" style="${count === 'none' ? 'display:none' : ''}"><label>Gewichtung</label>
+      <div class="seg" id="reWMode" style="width:100%">
+        <button type="button" data-w="factor" style="flex:1" class="${wMode === 'factor' ? 'active' : ''}">Zählt n-fach</button>
+        <button type="button" data-w="pct" style="flex:1" class="${wMode === 'pct' ? 'active' : ''}">Fester Anteil</button>
+      </div>
+      <div id="reWFactor" style="margin-top:8px;${wMode === 'factor' ? '' : 'display:none'}">
+        <input id="reFactor" type="number" min="0.1" max="20" step="0.5" value="${fmtNum(colFactor(col)).replace(',', '.')}">
+        <div class="hint">Standard 1 — wiegt wie eine einfache Note desselben Bereichs.</div>
+      </div>
+      <div id="reWPct" style="margin-top:8px;${wMode === 'pct' ? '' : 'display:none'}">
+        <input id="rePct" type="number" min="1" max="100" value="${fixedPct != null ? fmtNum(fixedPct).replace(',', '.') : ''}" placeholder="z. B. 10">
+        <div class="hint" id="rePctHint"></div>
+      </div>
     </div>
     <div class="field"><label>Gewichtung der Kriterien</label>
       ${critRows}
@@ -564,9 +583,15 @@ function openRasterSettings(c, col) {
       col.date = val('reDate');
       if (count === 'none') { col.noCount = true; col.type = 'muendlich'; }
       else { delete col.noCount; col.type = count; }
-      delete col.factor;
-      const f = clamp(parseFloat(val('reFactor').replace(',', '.')) || 1, 0.1, 20);
-      if (f !== 1) col.factor = f;
+      /* Gewichtung: nur speichern, was vom Standard abweicht */
+      delete col.factor; delete col.pct;
+      if (wPick === 'pct') {
+        const p = clamp(parseFloat(val('rePct').replace(',', '.')) || 0, 0, 100);
+        if (p > 0) col.pct = p;
+      } else {
+        const f = clamp(parseFloat(val('reFactor').replace(',', '.')) || 1, 0.1, 20);
+        if (f !== 1) col.factor = f;
+      }
       document.querySelectorAll('[data-w]').forEach(inp => {
         const cr = def.criteria.find(x => x.id === inp.dataset.w);
         if (cr) cr.weight = clamp(parseFloat(inp.value.replace(',', '.')) || 0, 0, 100);
@@ -584,11 +609,32 @@ function openRasterSettings(c, col) {
   };
   document.querySelectorAll('[data-w]').forEach(inp => inp.oninput = sumHint);
   sumHint();
+  /* Hinweis zum festen Anteil — Bezug ist der Bereich, in den die Einschätzung zählt */
+  const pctHint = () => {
+    const el = document.getElementById('rePctHint'); if (!el) return;
+    const b = count === 'schriftlich' ? c.weightWritten : c.weightOral;
+    const lbl = count === 'schriftlich' ? 'schriftlich' : 'mündlich';
+    const p = clamp(parseFloat(val('rePct').replace(',', '.')) || 0, 0, 100);
+    const restText = p > 0 && p < b
+      ? ` Die übrigen ${lbl}en Noten teilen sich dann noch ${fmtNum(b - p)} %.`
+      : (p >= b ? ` Das ist bereits der ganze ${lbl}e Anteil — die übrigen ${lbl}en Noten zählen dann nicht mehr.` : '');
+    el.textContent = `Anteil an der Gesamtnote. ${lbl.charAt(0).toUpperCase() + lbl.slice(1)} zählt insgesamt ${fmtNum(b)} %.${restText}`;
+  };
   document.querySelectorAll('#reCount button').forEach(b => b.onclick = () => {
     count = b.dataset.v;
     document.querySelectorAll('#reCount button').forEach(x => x.classList.toggle('active', x === b));
-    document.getElementById('reFactorWrap').style.display = count === 'none' ? 'none' : '';
+    document.getElementById('reWeightWrap').style.display = count === 'none' ? 'none' : '';
+    pctHint();
   });
+  document.querySelectorAll('#reWMode button').forEach(b => b.onclick = () => {
+    wPick = b.dataset.w;
+    document.querySelectorAll('#reWMode button').forEach(x => x.classList.toggle('active', x.dataset.w === wPick));
+    document.getElementById('reWFactor').style.display = wPick === 'factor' ? '' : 'none';
+    document.getElementById('reWPct').style.display = wPick === 'pct' ? '' : 'none';
+    pctHint();
+  });
+  document.getElementById('rePct').oninput = pctHint;
+  pctHint();
   const rl = document.getElementById('reReload');
   if (rl) rl.onclick = () => {
     const fresh = rasterClone(tpl); delete fresh.id;

@@ -61,7 +61,7 @@ function pseudonymizeData(d) {
     ordered.forEach((s, i) => { s.firstName = String(i + 1).padStart(2, '0'); s.lastName = ''; s.info = ''; });
     /* Rückmeldungen in Raster-Einschätzungen ebenso */
     ['1', '2'].forEach(h => ((c.halfYears || {})[h] || { columns: [] }).columns.forEach(col => {
-      if (col.raster) Object.values(col.raster.ratings || {}).forEach(r => { r.comment = ''; });
+      if (col.raster) Object.values(col.raster.ratings || {}).forEach(r => { r.comment = ''; r.note = ''; });
     }));
   });
   /* Im Notenprotokoll stehen Klarnamen in den Beschriftungen — fliegt komplett raus */

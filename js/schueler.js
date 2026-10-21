@@ -108,6 +108,7 @@ function renderStudent() {
         return `<span><small>${esc(cr.label)}</small><b>${li < 0 ? '–' : esc(def.levels[li].label)}</b></span>`;
       }).join('')}</div>
       ${!studentTalk && (rt.comment || '').trim() ? `<div class="sd-raster-c">${esc(rt.comment.trim())}</div>` : ''}
+      ${!studentTalk && (rt.note || '').trim() ? `<div class="sd-raster-c"><b>Notiz:</b> ${esc(rt.note.trim())}</div>` : ''}
     </button>`;
   }).join('');
 
