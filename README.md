@@ -1,11 +1,5 @@
 # Pult.
 
-<<<<<<< HEAD
-Ein Lehreralltagshelfer, vor allem für Noteneintragungen. Alle Daten bleiben dabei im Browser.
-Es empfiehlt sich Pult. als Webapp zu installieren und für die Daten regelmäßig ein Backup zu erstellen. 
-
-Deploy am besten auf den eigenen Webspace oder auf einen lokal erstellten Webserver. 
-=======
 Eine Webapp zur vertraulichen Verwaltung von Noten für Lehrkräfte. Ideal für Dienstgeräte. 
 Eine Version kann über https://schule.schrickel.cc/pult verwendet werden. Hier gibt es allerdings keine Garantie, das die App dauerhaft online bleibt. 
 
@@ -42,18 +36,9 @@ unter **Einstellungen → Über Pult. → Nach Update suchen** angefordert wird.
 3. Neue Dateien unter `js/` auch in `ASSETS` in `sw.js` und als `<script>` in `index.html` aufnehmen.
 4. Alles auf den Webspace laden.
 
-<<<<<<< HEAD
-Ohne Schritt 1 findet die App zwar die neue `version.json`, kann aber nichts installieren.
-
-## Aufbau
-
-Reines HTML/CSS/JS ohne Build-Schritt. Die Dateien in `js/` werden der Reihe nach geladen
-(siehe `index.html`); alle außer `pult.js` enthalten nur Definitionen, `pult.js` startet die App.
-=======
 
 ## Disclaimer
 
 Dies ist ein privates, nicht-kommerzielles Hobby-Projekt, das mit der interessierten Öffentlichkeit und für Kollegen geteilt wird. Ob der Einsatz von Pult. rechtlich im jeweiligen Bundesland möglich ist, muss selbstständig in den jeweiligen Verordnungen insbesondere bezüglich dem Einsatz auf oder außerhalb von Dienstgeräten recherchiert werden. Datenschutzmäßig ist die App soweit unkritisch, da keine Daten online verarbeitet oder geteilt werden.
 
 Der Code ist maßgeblich mithilfe von LLMs (Claude OPUS 5 und 5.5) erstellt worden. 
->>>>>>> github/main
