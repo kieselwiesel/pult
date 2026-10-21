@@ -1,0 +1,64 @@
+{
+  "version": "1.0.5",
+  "date": "2026-10-17",
+  "changelog": [
+    {
+      "version": "1.0.5",
+      "date": "2026-10-17",
+      "changes": [
+        "Zwischenstand: wahlweise Gesamtstand oder mündlichen Stand einfrieren",
+        "Zwischenstand: Anzeige als Dezimalwert oder als Punkte bzw. Tendenznote (je nach Skala des Kurses)",
+        "Zwischenstand: einzelne Werte per Klick anpassbar, der ursprüngliche Wert bleibt klein in Klammern sichtbar"
+      ]
+    },
+    {
+      "version": "1.0.4",
+      "date": "2026-10-11",
+      "changes": [
+        "Notentabelle: Spaltenköpfe in drei Zeilen — Name, dann Art und Eigenschaften (KA, Raster, zählt nicht, Gewichtung), dann Datum"
+      ]
+    },
+    {
+      "version": "1.0.3",
+      "date": "2026-10-11",
+      "changes": [
+        "Druckansicht: nur noch ein Knopf „PDF / Drucken“ — erstellt das PDF und öffnet das Teilen-Menü mit Drucken, In Dateien sichern, AirDrop …",
+        "Druckansicht, Fenster, Sperrbildschirm und Vollbild-Ansichten rücken oben noch etwas weiter nach unten (iPadOS-27-Verlauf)"
+      ]
+    },
+    {
+      "version": "1.0.2",
+      "date": "2026-10-11",
+      "changes": [
+        "Druckansicht: „PDF“ erstellt jetzt direkt ein PDF und öffnet das Teilen-Menü (Drucken, In Dateien sichern, AirDrop …) — ersetzt die bisherige HTML-Datei",
+        "„Drucken“ funktioniert jetzt auch in der Web-App auf dem iPad (über das PDF und das Teilen-Menü)",
+        "Druckansicht, Fenster, Sperrbildschirm und Vollbild-Ansichten rücken oben etwas nach unten, damit der Verlauf von iPadOS 27 nichts verdeckt"
+      ]
+    },
+    {
+      "version": "1.0.1",
+      "date": "2026-10-11",
+      "changes": [
+        "Bewertungsbogen bei Klassenarbeiten und Tests: neben der Prozentgrenze steht jetzt die Rohpunktzahl (exakt und auf halbe Punkte aufgerundet), knappe Grenzen sind rot markiert"
+      ]
+    },
+    {
+      "version": "1.0.0",
+      "date": "2026-10-10",
+      "changes": [
+        "Versionsnummer und manuelle Updates: Pult. läuft komplett offline und übernimmt eine neue Version nur auf Knopfdruck",
+        "Bewertungsraster: Vorlagen mit Kriterien, Stufen und Gewichtung, Einschätzung mit Notenvorschlag, Selbsteinschätzung und Entwicklung",
+        "Drucken und als Datei sichern: Raster-Bögen, Notenübersicht, Zeugnisübersicht aller Kurse, Schülerbögen, Klassenliste, Sitzplan, Gruppen",
+        "Einstellungen in Unterseiten, mit Hell/Dunkel und Vorgaben für neue Kurse",
+        "Bewertungsraster-Vorlagen direkt in den Einstellungen",
+        "Datensicherung: verschlüsselte Backups, Teilen-Menü, interne Sicherungsstände, Schuljahreswechsel mit Archiv",
+        "Backups wahlweise mit Touch ID / Face ID verschlüsseln (zusätzlich oder statt Passwort)",
+        "Gruppen bilden mit Regeln, fairer Zufallsaufruf und Timer (unter „Mehr“)",
+        "Neue Schüleransicht: blättern, Überblick, Verlauf mit Kursschnitt, Notizen als Zeitleiste, Gesprächsmodus",
+        "„Jetzt“-Stunde auf der Startseite, Suche (⌘K), „Rückgängig“ direkt nach einer Noteneingabe",
+        "Stundenplan als Kalenderdatei für das Kalender-Widget, Termine mit Erinnerung",
+        "Pult. öffnet nach einem Neustart wieder die zuletzt genutzte Seite"
+      ]
+    }
+  ]
+}
