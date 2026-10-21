@@ -31,7 +31,8 @@ function pdHead(sub, title, meta) {
   </header>`;
 }
 const pdStand = () => `Stand ${fmtDateLong(todayISO())}`;
-const pdFoot = extra => `<div class="pd-foot">${extra ? extra + ' · ' : ''}Pult. · ${pdStand()} · vertraulich</div>`;
+/* data-pp-*: siehe splitSheets in print.js (Fußzeile auf jedem Blatt, mit Seitenzahl) */
+const pdFoot = extra => `<div class="pd-foot" data-pp-repeat>${extra ? extra + ' · ' : ''}Pult. · ${pdStand()} · vertraulich<span data-pp-part></span></div>`;
 const pdCourseSub = c => `${esc(c.subject)} · ${esc(c.className)}`;
 /* Einzelnote / Schnitt in der Skala des Kurses; leer bleibt leer */
 const pdG = (p, c, avg) => (p == null || isNaN(p) ? '' : fmtGrade(p, c.scale, avg));
@@ -68,7 +69,8 @@ function pdBindSeg(id, onPick) {
     onPick(b.dataset.v);
   });
 }
-const pdReadChecks = o => document.querySelectorAll('.modal-body [data-o]').forEach(i => o[i.dataset.o] = i.checked);
+/* sel: nur die Häkchen in diesem Bereich lesen (Dialoge mit mehreren Optionssätzen) */
+const pdReadChecks = (o, sel) => document.querySelectorAll(`${sel || '.modal-body'} [data-o]`).forEach(i => o[i.dataset.o] = i.checked);
 
 /* ============================================================
    Einstieg: Drucken im Kurs
@@ -235,40 +237,71 @@ function pdNotenPage(c, o) {
 
   return `<section class="pp-sheet pd">
     ${pdHead(pdCourseSub(c), 'Notenübersicht', `${scaleName(c.scale)} · Gewichtung ${c.weightWritten}/${c.weightOral}<br>${hys.length === 2 ? 'Schuljahr' : hys[0] + '. Halbjahr'}`)}
-    ${c.students.length ? `<table class="pd-t"><thead>${head1}${head2}</thead><tbody>${rows}</tbody>${foot}</table>` : '<p>Keine Schüler:innen.</p>'}
+    ${c.students.length ? `<table class="pd-t" data-split="2"><thead>${head1}${head2}</thead><tbody>${rows}</tbody>${foot}</table>` : '<p>Keine Schüler:innen.</p>'}
     ${pdFoot(hasManual ? '* manuell festgelegt' : '')}
   </section>`;
 }
 
 /* ============================================================
-   Zeugnisübersicht aller Kurse (je Kurs eine Seite, hoch)
+   Drucken für alle Kurse: Zeugnisübersicht (je Kurs eine Seite, hoch)
+   oder die komplette Notenübersicht wie im Kurs (je Kurs eine Seite, quer)
    ============================================================ */
 function openAllCoursesPrint() {
   if (!data.courses.length) return toast('Noch keine Kurse.');
-  const o = pdOpts('zeugnis', { hy: '1', remark: true, spiegel: true, skip: [] });
-  modal('Zeugnisübersicht', `
-    <div class="field"><label>Stand</label>${pdSeg('poHy', [['1', '1. Halbjahr'], ['2', '2. Halbjahr + Endjahr']], o.hy)}</div>
+  const o = pdOpts('zeugnis', { kind: 'zeugnis', hy: '1', remark: true, spiegel: true, skip: [] });
+  /* Optionen der Notenübersicht teilen sich Kurs- und Gesamtdruck */
+  const on = pdOpts('noten', { hy: '1', singles: true, mean: true, pseudo: false });
+  modal('Drucken — alle Kurse', `
+    <div class="field"><label>Ausdruck</label>${pdSeg('poKind', [['zeugnis', 'Zeugnisübersicht'], ['noten', 'Notenübersicht komplett']], o.kind)}</div>
+    <div id="poZ" style="${o.kind === 'zeugnis' ? '' : 'display:none'}">
+      <div class="field"><label>Stand</label>${pdSeg('poHyZ', [['1', '1. Halbjahr'], ['2', '2. Halbjahr + Endjahr']], o.hy)}</div>
+    </div>
+    <div id="poN" style="${o.kind === 'noten' ? '' : 'display:none'}">
+      <div class="field"><label>Halbjahr</label>${pdSeg('poHyN', [['1', '1. Halbjahr'], ['2', '2. Halbjahr'], ['beide', 'Beide + Endjahr']], on.hy)}</div>
+    </div>
     <div class="field"><label>Kurse</label><div class="check-list">
       ${data.courses.map(c => `<label class="check-row"><input type="checkbox" data-course="${c.id}" ${o.skip.includes(c.id) ? '' : 'checked'}>
         <span>${esc(c.subject)} ${esc(c.className)} <small>${c.students.filter(studentActive).length} Schüler:innen</small></span></label>`).join('')}
     </div></div>
-    <div class="check-list">
-      ${pdChk('remark', 'Spalte für Bemerkungen', o.remark)}
-      ${pdChk('spiegel', 'Notenspiegel und Kursschnitt', o.spiegel)}
+    <div id="poZChk" style="${o.kind === 'zeugnis' ? '' : 'display:none'}">
+      <div class="check-list">
+        ${pdChk('remark', 'Spalte für Bemerkungen', o.remark)}
+        ${pdChk('spiegel', 'Notenspiegel und Kursschnitt', o.spiegel)}
+      </div>
+      <div class="hint" style="margin-top:8px">Eine Seite (hoch) pro Kurs — z. B. für die Zeugniskonferenz.</div>
     </div>
-    <div class="hint" style="margin-top:8px">Eine Seite (hoch) pro Kurs — z. B. für die Zeugniskonferenz.</div>`, [
+    <div id="poNChk" style="${o.kind === 'noten' ? '' : 'display:none'}">
+      <div class="check-list">
+        ${pdChk('singles', 'Einzelnoten', on.singles, 'sonst nur Schnitte und Gesamtnote')}
+        ${pdChk('mean', 'Kursschnitt als letzte Zeile', on.mean)}
+        ${pdChk('pseudo', 'Nummern statt Namen', on.pseudo, 'z. B. für einen Aushang')}
+      </div>
+      <div class="hint" style="margin-top:8px">Die vollständige Notentabelle wie beim Drucken im Kurs — eine Seite (quer) pro Kurs.</div>
+    </div>`, [
     { label: 'Abbrechen', onClick: closeModal },
     { label: 'Vorschau ›', cls: 'primary', onClick: () => {
-      pdReadChecks(o);
+      pdReadChecks(o, '#poZChk'); pdReadChecks(on, '#poNChk');
       o.skip = [...document.querySelectorAll('[data-course]')].filter(i => !i.checked).map(i => i.dataset.course);
       const courses = data.courses.filter(c => !o.skip.includes(c.id));
       if (!courses.length) return toast('Bitte mindestens einen Kurs wählen.');
-      pdKeep('zeugnis', o); closeModal();
+      pdKeep('zeugnis', o); pdKeep('noten', on); closeModal();
+      if (o.kind === 'noten') {
+        const hyLbl = on.hy === 'beide' ? 'Schuljahr' : `${on.hy}. Halbjahr`;
+        openPrintView({ title: `Notenübersicht — alle Kurse · ${hyLbl}`, landscape: true, css: PD_CSS, fit: PD_FIT,
+          pages: courses.map(c => pdNotenPage(c, on)), filename: `notenuebersicht-alle-kurse-${on.hy === 'beide' ? 'schuljahr' : 'hj' + on.hy}` });
+        return;
+      }
       openPrintView({ title: `Zeugnisübersicht — ${o.hy === '2' ? '2. Halbjahr' : '1. Halbjahr'}`, landscape: false, css: PD_CSS, fit: PD_FIT,
         pages: courses.map(c => pdZeugnisPage(c, o)), filename: `zeugnisuebersicht-${o.hy === '2' ? 'hj2' : 'hj1'}` });
     }},
   ]);
-  pdBindSeg('poHy', v => o.hy = v);
+  pdBindSeg('poKind', v => {
+    o.kind = v;
+    ['poZ', 'poZChk'].forEach(id => document.getElementById(id).style.display = v === 'zeugnis' ? '' : 'none');
+    ['poN', 'poNChk'].forEach(id => document.getElementById(id).style.display = v === 'noten' ? '' : 'none');
+  });
+  pdBindSeg('poHyZ', v => o.hy = v);
+  pdBindSeg('poHyN', v => on.hy = v);
 }
 
 function pdZeugnisPage(c, o) {
@@ -302,7 +335,7 @@ function pdZeugnisPage(c, o) {
 
   return `<section class="pp-sheet pd">
     ${pdHead(pdCourseSub(c), `Zeugnisübersicht ${h === '2' ? '2. Halbjahr' : '1. Halbjahr'}`, `${scaleName(c.scale)} · Gewichtung ${c.weightWritten}/${c.weightOral}<br>${people.length} Schüler:innen`)}
-    ${people.length ? `<table class="pd-t"><thead><tr><th>Nr.</th><th class="pd-name">Name</th>${heads.map(x => `<th>${x}</th>`).join('')}${o.remark ? '<th class="pd-remark">Bemerkung</th>' : ''}</tr></thead>
+    ${people.length ? `<table class="pd-t" data-split="2"><thead><tr><th>Nr.</th><th class="pd-name">Name</th>${heads.map(x => `<th>${x}</th>`).join('')}${o.remark ? '<th class="pd-remark">Bemerkung</th>' : ''}</tr></thead>
       <tbody>${rows}</tbody></table>` : '<p>Keine aktiven Schüler:innen.</p>'}
     ${spiegel}
     ${pdFoot(hasManual ? '* manuell festgelegt' : '')}
@@ -412,7 +445,7 @@ function pdListePage(c, o) {
   return `<section class="pp-sheet pd">
     ${pdHead(pdCourseSub(c), esc(o.title || 'Klassenliste'), `${people.length} Schüler:innen`)}
     ${o.dateLine ? '<div class="pd-dateline"><span>Datum:</span><span>Notiz:</span></div>' : ''}
-    <table class="pd-t pd-list"><thead><tr><th>Nr.</th><th class="pd-name">Name</th>${cols.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead>
+    <table class="pd-t pd-list" data-split="2"><thead><tr><th>Nr.</th><th class="pd-name">Name</th>${cols.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead>
       <tbody>${rows}</tbody></table>
     ${pdFoot()}
   </section>`;

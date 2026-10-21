@@ -69,6 +69,14 @@ function openPrintView(opts) {
   document.body.appendChild(el);
   document.body.classList.add('printing');
 
+  /* Verdichten und Aufteilen in Originalgröße messen — so, wie das PDF die
+     Seiten später abfotografiert */
+  el.style.setProperty('--pv-zoom', '1');
+  if (opts.fit && opts.fit.length) fitSheets(el, landscape, opts.fit);
+  splitSheets(el, landscape);
+  const nPages = el.querySelectorAll('.pp-sheet').length;
+  el.querySelector('.pv-title span').textContent = `${nPages} ${nPages === 1 ? 'Seite' : 'Seiten'} · A4 ${landscape ? 'quer' : 'hoch'}`;
+
   /* Vorschau auf Bildschirmbreite verkleinern (zoom statt transform, damit
      die Höhe mitschrumpft und nicht leerer Raum stehen bleibt) */
   const sheetPx = pageMm(landscape).w * 96 / 25.4;
@@ -78,7 +86,6 @@ function openPrintView(opts) {
   };
   fit();
   window.addEventListener('resize', fit);
-  if (opts.fit && opts.fit.length) fitSheets(el, landscape, opts.fit);
 
   /* PDF entsteht einmal pro Vorschau und wird dann wiederverwendet */
   const filename = (opts.filename || 'pult-druck') + '.pdf';
@@ -128,16 +135,137 @@ function openPrintView(opts) {
 }
 /* Seiten, die über ein Blatt hinauslaufen, schrittweise verdichten. Gemessen
    wird das Verhältnis Höhe/Breite — das bleibt unter zoom gleich. */
-function fitSheets(root, landscape, classes) {
+const sheetTooHigh = (sheet, landscape) => {
   const p = pageMm(landscape);
-  const limit = (p.h / p.w) * 0.985;           // kleiner Puffer für Abweichungen beim Druck
+  sheet.style.minHeight = '0';
+  const r = sheet.offsetHeight / sheet.offsetWidth;
+  sheet.style.minHeight = '';
+  return r > (p.h / p.w) * 0.985;              // kleiner Puffer für Abweichungen beim Druck
+};
+const sheetTooWide = sheet => sheet.scrollWidth > sheet.clientWidth + 2;
+
+/* Seiten mit aufteilbarer Tabelle werden nur so weit verdichtet — danach
+   lieber auf mehrere Blätter verteilen als winzige Schrift */
+const SPLIT_FIT_STEPS = 2;
+function fitSheets(root, landscape, classes) {
   /* zu hoch — oder zu breit (Tabellen mit vielen Spalten laufen seitlich hinaus) */
-  const over = sheet => sheet.offsetHeight / sheet.offsetWidth > limit || sheet.scrollWidth > sheet.clientWidth + 2;
+  const over = sheet => sheetTooHigh(sheet, landscape) || sheetTooWide(sheet);
   root.querySelectorAll('.pp-sheet').forEach(sheet => {
-    sheet.style.minHeight = '0';
-    for (let i = 0; i < classes.length && over(sheet); i++) sheet.classList.add(classes[i]);
-    sheet.style.minHeight = '';
+    const steps = sheet.querySelector('table[data-split]') ? Math.min(SPLIT_FIT_STEPS, classes.length) : classes.length;
+    for (let i = 0; i < steps && over(sheet); i++) sheet.classList.add(classes[i]);
   });
+}
+
+/* ---------- Tabellen auf mehrere Blätter verteilen ----------
+   Gilt für Seiten mit <table data-split="k">: k = Anzahl der Spalten links
+   (z. B. Nr. und Name), die auf jedem Blatt wiederkehren.
+   - zu breit: die übrigen Spalten werden auf Blätter verteilt
+   - zu hoch: Umbruch zwischen zwei Zeilen; der Tabellenkopf wiederholt sich,
+     die Fußzeile der Tabelle (tfoot) steht nur auf dem letzten Blatt
+   Was auf dem Blatt vor der Tabelle steht, wiederholt sich; was danach
+   kommt, nur auf dem letzten Blatt — außer es trägt data-pp-repeat.
+   Ein <span data-pp-part> bekommt „· Seite 2/3". */
+function splitSheets(root, landscape) {
+  root.querySelectorAll('.pp-sheet').forEach(sheet => {
+    if (!sheet.querySelector('table[data-split]')) return;
+    if (!sheetTooHigh(sheet, landscape) && !sheetTooWide(sheet)) return;
+    const parts = splitByCols(sheet).flatMap(s => splitByRows(s, landscape));
+    if (parts.length > 1) parts.forEach((s, i) => s.querySelectorAll('[data-pp-part]').forEach(x =>
+      x.textContent = ` · Seite ${i + 1}/${parts.length}`));
+  });
+}
+
+/* Spaltenposition jeder Zelle (berücksichtigt colspan/rowspan) */
+function tableGrid(table) {
+  const pos = new Map(), occ = [];
+  let width = 0;
+  [...table.rows].forEach((tr, r) => {
+    let col = 0;
+    [...tr.cells].forEach(cell => {
+      while (occ[r] && occ[r][col]) col++;
+      const cs = cell.colSpan || 1, rs = cell.rowSpan || 1;
+      pos.set(cell, { start: col, span: cs });
+      for (let dr = 0; dr < rs; dr++) for (let dc = 0; dc < cs; dc++) (occ[r + dr] = occ[r + dr] || [])[col + dc] = true;
+      col += cs;
+      width = Math.max(width, col);
+    });
+  });
+  return { pos, width };
+}
+/* Elemente nach der Tabelle, die nur aufs letzte Blatt gehören */
+function sheetTrailing(sheet) {
+  let top = sheet.querySelector('table[data-split]');
+  while (top.parentElement !== sheet) top = top.parentElement;
+  const out = [];
+  for (let n = top.nextElementSibling; n; n = n.nextElementSibling) if (!n.hasAttribute('data-pp-repeat')) out.push(n);
+  return out;
+}
+
+/* Blatt mit den Spalten [0, keep) ∪ [a, b) */
+function sheetWithCols(sheet, keep, a, b) {
+  const s = sheet.cloneNode(true);
+  const table = s.querySelector('table[data-split]');
+  const { pos } = tableGrid(table);
+  pos.forEach(({ start, span }, cell) => {
+    const end = start + span;
+    const n = Math.max(0, Math.min(end, keep) - start) + Math.max(0, Math.min(end, b) - Math.max(start, a));
+    if (n === 0) cell.remove(); else cell.colSpan = n;
+  });
+  return s;
+}
+function splitByCols(sheet) {
+  if (!sheetTooWide(sheet)) return [sheet];
+  const table = sheet.querySelector('table[data-split]');
+  const keep = parseInt(table.dataset.split, 10) || 0;
+  const total = tableGrid(table).width;
+  if (total - keep < 2) return [sheet];
+  /* probeweise neben dem Original einhängen, damit die Breite stimmt */
+  const fits = (a, b) => {
+    const probe = sheetWithCols(sheet, keep, a, b);
+    sheet.after(probe);
+    const ok = !sheetTooWide(probe);
+    probe.remove();
+    return ok;
+  };
+  const ranges = [];
+  for (let a = keep; a < total;) {
+    /* möglichst viele Spalten — mindestens eine */
+    let lo = a + 1, hi = total;
+    while (lo < hi) { const mid = Math.ceil((lo + hi) / 2); if (fits(a, mid)) lo = mid; else hi = mid - 1; }
+    ranges.push([a, lo]); a = lo;
+  }
+  const parts = ranges.map(([a, b]) => sheetWithCols(sheet, keep, a, b));
+  parts.slice(0, -1).forEach(s => sheetTrailing(s).forEach(n => n.remove()));
+  sheet.replaceWith(...parts);
+  return parts;
+}
+
+function splitByRows(sheet, landscape) {
+  const parts = [];
+  let cur = sheet;
+  for (;;) {
+    const n = cur.querySelector('table[data-split]').tBodies[0]?.rows.length || 0;
+    if (n <= 1 || !sheetTooHigh(cur, landscape)) { parts.push(cur); break; }
+    /* Blatt mit den ersten m Zeilen, ohne Tabellenfuß und Nachfolgendes */
+    const head = m => {
+      const s = cur.cloneNode(true);
+      const table = s.querySelector('table[data-split]');
+      [...table.tBodies[0].rows].slice(m).forEach(tr => tr.remove());
+      if (table.tFoot) table.tFoot.remove();
+      sheetTrailing(s).forEach(x => x.remove());
+      return s;
+    };
+    const fits = m => { const probe = head(m); cur.after(probe); const ok = !sheetTooHigh(probe, landscape); probe.remove(); return ok; };
+    let lo = 1, hi = n - 1;
+    while (lo < hi) { const mid = Math.ceil((lo + hi) / 2); if (fits(mid)) lo = mid; else hi = mid - 1; }
+    const first = head(lo);
+    const rest = cur.cloneNode(true);
+    [...rest.querySelector('table[data-split]').tBodies[0].rows].slice(0, lo).forEach(tr => tr.remove());
+    cur.replaceWith(first, rest);
+    parts.push(first);
+    cur = rest;
+  }
+  return parts;
 }
 function closePrintView() { if (printCleanup) { printCleanup(); printCleanup = null; } }
 

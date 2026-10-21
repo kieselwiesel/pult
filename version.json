@@ -1,7 +1,15 @@
 {
-  "version": "1.0.6",
+  "version": "1.0.7",
   "date": "2026-10-21",
   "changelog": [
+    {
+      "version": "1.0.7",
+      "date": "2026-10-21",
+      "changes": [
+        "Drucken in der Kursübersicht: wahlweise Zeugnisübersicht oder komplette Notenübersicht aller gewählten Kurse",
+        "Große Tabellen im Ausdruck (Notenübersicht, Zeugnisübersicht, Klassenliste): zu breite werden auf mehrere Seiten verteilt (Nr. und Name auf jeder Seite), zu lange brechen zwischen zwei Zeilen um und wiederholen den Tabellenkopf — statt abgeschnitten oder zerteilt zu werden"
+      ]
+    },
     {
       "version": "1.0.6",
       "date": "2026-10-21",

@@ -1163,7 +1163,7 @@ function renderCourses() {
     <div class="page-head">
       <div><h1>Kurse</h1><div class="sub">${data.courses.length} Kurse · ${studCount} Schüler:innen insgesamt</div></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn" id="btnPrintAll" title="Zeugnisübersicht aller Kurse">Drucken</button>
+        <button class="btn" id="btnPrintAll" title="Zeugnis- oder Notenübersicht aller Kurse">Drucken</button>
         <button class="btn primary" id="btnNewCourse">+ Neuer Kurs</button>
       </div>
     </div>
