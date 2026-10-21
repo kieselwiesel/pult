@@ -17,7 +17,7 @@
    ============================================================ */
 'use strict';
 
-/* ---------- Beispiel-Vorlagen (Mathematik Sek I / Sek II) ---------- */
+/* ---------- Beispiel-Vorlage (fachunabhängig) ---------- */
 const RASTER_INTRO = 'Schätze deine eigene Mitarbeit ein. Markiere Sätze, die deiner Meinung nach auf dich zutreffen.';
 const RASTER_STD_LEVELS = () => ([
   { id: 'l1', label: 'sehr gut', min: 13, max: 15,
@@ -33,28 +33,10 @@ const RASTER_STD_LEVELS = () => ([
   { id: 'l6', label: 'ungenügend', min: 0, max: 0,
     desc: 'Die Leistung entspricht nicht den Anforderungen und selbst Grundkenntnisse sind so lückenhaft, dass Mängel in absehbarer Zeit nicht behoben werden können.' },
 ]);
-const RASTER_TXT = {
-  inhalt: [
-    'Ich beherrsche den Lernstoff sicher und bringe den Unterricht durch meine Beiträge voran.',
-    'Ich beherrsche den Lernstoff und entwickele eigene Gedanken.',
-    'Ich kann gelerntes Wissen wiedergeben und gelernte Verfahren anwenden.',
-    'Ich kann teilweise gelerntes Wissen wiedergeben und gelernte Verfahren anwenden.',
-    'Ich kann kaum auf das Unterrichtsthema eingehen.',
-    'Ich kann nicht auf das Unterrichtsthema eingehen.',
-  ],
-  fachsprache: [
-    'Ich verwende in meinen Beiträgen immer die Fachsprache und kenne die Bedeutung von Fachwörtern.',
-    'Ich verwende in meinen Beiträgen meistens die Fachsprache und kenne die Bedeutung von Fachwörtern.',
-    'Ich verwende ab und zu Fachsprache. Ich kenne die Bedeutung von Fachwörtern oder schlage sie selbstständig nach.',
-    'Ich verwende selten Fachsprache. Ich kenne die meisten der Fachwörter.',
-    'Ich verwende fast nie die Fachsprache. Ich kenne kaum Fachwörter.',
-    'Ich verwende nie die Fachsprache und kenne keine Fachwörter.',
-  ],
-};
 function rasterExample(id, name, crits) {
   const levels = RASTER_STD_LEVELS();
   return {
-    id, name, subject: 'Mathematik', intro: RASTER_INTRO, levels,
+    id, name, subject: '', intro: RASTER_INTRO, levels,
     criteria: crits.map(([cid, label, weight, texts]) => ({
       id: cid, label, weight,
       texts: Object.fromEntries(levels.map((l, i) => [l.id, texts[i] || ''])),
@@ -63,76 +45,54 @@ function rasterExample(id, name, crits) {
 }
 function rasterExamples() {
   return [
-    rasterExample('ex-mathe-sek1', 'Mitarbeit Mathematik (Sek I)', [
+    rasterExample('ex-mitarbeit', 'Beispielraster Mitarbeit', [
       ['beteiligung', 'Beteiligung am Unterricht', 20, [
-        'Ich bin immer aufmerksam und beteilige mich stets am Unterricht.',
-        'Ich bin aufmerksam und beteilige mich meistens am Unterricht.',
-        'Ich bin aufmerksam und beteilige mich jede Stunde am Unterricht.',
-        'Ich melde mich fast jede Stunde und bin meistens aufmerksam. Nach Aufforderung kann ich etwas zum Unterricht beitragen.',
-        'Ich beteilige mich selten von mir aus. Ich kann nach Aufforderung in der Regel etwas zum Unterricht beitragen.',
-        'Ich höre den Anderen nicht zu und beteilige mich nie. Auch nach Aufforderung kann ich nichts zum Unterricht beitragen.',
+        'Ich bin immer aufmerksam und beteilige mich in jeder Stunde von mir aus am Unterricht.',
+        'Ich bin aufmerksam und beteilige mich meistens von mir aus am Unterricht.',
+        'Ich bin aufmerksam und beteilige mich regelmäßig am Unterricht.',
+        'Ich beteilige mich selten von mir aus. Nach Aufforderung kann ich meistens etwas beitragen.',
+        'Ich beteilige mich fast nie und kann auch nach Aufforderung nur selten etwas beitragen.',
+        'Ich beteilige mich nie. Auch nach Aufforderung kann ich nichts zum Unterricht beitragen.',
       ]],
-      ['inhalt', 'Inhaltliche Qualität der Mitarbeit', 25, RASTER_TXT.inhalt],
-      ['fachsprache', 'Fachsprache', 15, RASTER_TXT.fachsprache],
+      ['qualitaet', 'Qualität der Beiträge', 25, [
+        'Meine Beiträge sind fachlich richtig, durchdacht und bringen den Unterricht voran.',
+        'Meine Beiträge sind fachlich richtig und enthalten eigene Gedanken.',
+        'Ich kann Gelerntes wiedergeben und auf ähnliche Aufgaben übertragen.',
+        'Ich kann Gelerntes teilweise wiedergeben, meine Beiträge sind manchmal ungenau.',
+        'Meine Beiträge gehen kaum auf das Unterrichtsthema ein.',
+        'Meine Beiträge gehen nicht auf das Unterrichtsthema ein.',
+      ]],
+      ['fachsprache', 'Fachsprache und Ausdruck', 15, [
+        'Ich drücke mich klar aus und verwende Fachbegriffe immer sicher und richtig.',
+        'Ich drücke mich verständlich aus und verwende Fachbegriffe meistens richtig.',
+        'Ich verwende ab und zu Fachbegriffe und schlage unbekannte Begriffe selbstständig nach.',
+        'Ich verwende selten Fachbegriffe, kenne aber die meisten.',
+        'Ich verwende fast nie Fachbegriffe und kenne nur wenige.',
+        'Ich verwende keine Fachbegriffe und kenne sie nicht.',
+      ]],
       ['selbststaendig', 'Selbstständiges Arbeiten', 15, [
-        'Ich arbeite ausdauernd und eigenständig. Ich weiß, was zu tun ist, und helfe anderen.',
-        'Ich arbeite weitestgehend selbstständig, frage selbst nach, wenn es nötig ist und bin offen gegenüber neuen Aufgaben.',
+        'Ich arbeite ausdauernd und eigenständig, weiß, was zu tun ist, und helfe anderen.',
+        'Ich arbeite weitgehend selbstständig und frage gezielt nach, wenn es nötig ist.',
         'Ich brauche manchmal Hilfe, erledige dann aber die gestellten Aufgaben.',
-        'Ich bin ab und zu abgelenkt, arbeite jedoch nach Aufforderung weiter.',
-        'Ich störe häufig andere, anstatt zu arbeiten und bin oft unkonzentriert.',
-        'Ich störe andere und arbeite nicht.',
+        'Ich bin öfter abgelenkt, arbeite nach Aufforderung aber weiter.',
+        'Ich arbeite nur mit viel Hilfe und erledige Aufgaben meist unvollständig.',
+        'Ich arbeite auch mit Hilfe nicht an den Aufgaben.',
       ]],
       ['zusammenarbeit', 'Zusammenarbeit', 10, [
         'Ich arbeite gut mit anderen zusammen und bringe Gruppen- und Partnerarbeiten voran.',
-        'Ich bin bei Gruppen- und Partnerarbeiten verlässlich und arbeite mit den anderen zusammen.',
-        'Ich versuche mich bei Gruppen- und Partnerarbeiten einzubringen.',
-        'Ich bringe mich bei Gruppen- und Partnerarbeiten nur wenig ein, mache aber mit und störe andere nicht.',
-        'Ich lenke die Gruppe/meine:n Partner:in ab und zu von der Arbeit ab und trage kaum etwas bei.',
-        'Ich halte die Gruppe/meine:n Partner:in ab und trage nichts bei.',
+        'Ich bin in Gruppen- und Partnerarbeiten verlässlich und gehe auf andere ein.',
+        'Ich bringe mich in Gruppen- und Partnerarbeiten ein.',
+        'Ich bringe mich in Gruppen- und Partnerarbeiten nur wenig ein, störe aber nicht.',
+        'Ich lenke andere ab und zu von der Arbeit ab und trage kaum etwas bei.',
+        'Ich halte andere von der Arbeit ab und trage nichts bei.',
       ]],
-      ['hausaufgaben', 'Hausaufgaben, Unterlagen', 15, [
-        'Meine Hausaufgaben sind immer vollständig und meine Unterlagen sorgfältig geführt.',
+      ['hausaufgaben', 'Hausaufgaben und Unterlagen', 15, [
+        'Meine Hausaufgaben sind immer vollständig und sorgfältig, meine Unterlagen ordentlich geführt.',
         'Meine Hausaufgaben und Unterlagen sind meistens vollständig und gut bearbeitet.',
-        'Ich habe meine Hausaufgaben meistens dabei oder hole sie eigenständig nach. Meine Unterlagen enthalten das Wichtigste.',
-        'Ich erledige meine Hausaufgaben teilweise unvollständig und meine Unterlagen sind nicht ganz vollständig.',
-        'Die Hausaufgaben erledige ich oft nicht oder unvollständig, in meinen Unterlagen fehlt Vieles.',
+        'Ich habe meine Hausaufgaben meistens oder hole sie selbstständig nach. Meine Unterlagen enthalten das Wichtigste.',
+        'Meine Hausaufgaben sind öfter unvollständig, in meinen Unterlagen fehlt einiges.',
+        'Ich erledige meine Hausaufgaben oft nicht, in meinen Unterlagen fehlt vieles.',
         'Ich erledige keine Hausaufgaben und habe keine Unterlagen.',
-      ]],
-    ]),
-    rasterExample('ex-mathe-sek2', 'Mitarbeit Mathematik (Sek II)', [
-      ['beteiligung', 'Beteiligung am Unterricht', 20, [
-        'Ich beteilige mich stets am Unterricht.',
-        'Ich beteilige mich meistens am Unterricht.',
-        'Ich beteilige mich jede Stunde am Unterricht.',
-        'Ich beteilige mich fast jede Stunde. Nach Aufforderung kann ich etwas zum Unterricht beitragen.',
-        'Ich beteilige mich selten bis nie von mir aus. Ich kann auch nach Aufforderung in der Regel etwas zum Unterricht beitragen.',
-        'Ich beteilige mich nie. Auch nach Aufforderung kann ich nichts zum Unterricht beitragen.',
-      ]],
-      ['inhalt', 'Inhaltliche Qualität der Mitarbeit', 25, RASTER_TXT.inhalt],
-      ['fachsprache', 'Fachsprache', 15, RASTER_TXT.fachsprache],
-      ['selbststaendig', 'Selbstständiges Arbeiten', 15, [
-        'Ich arbeite eigenständig. Ich weiß, was zu tun ist, und helfe anderen.',
-        'Ich arbeite weitestgehend selbstständig, frage selbst nach, wenn es nötig ist und bin offen gegenüber neuen Aufgaben.',
-        'Ich brauche manchmal Hilfe, erledige dann aber die gestellten Aufgaben.',
-        'Ich brauche häufig Hilfe, erledige dann die gestellten Aufgaben.',
-        'Ich erledige die Aufgaben nur mit Hilfe und unvollständig.',
-        'Auch mit Hilfe kann ich die Aufgaben nicht erledigen.',
-      ]],
-      ['verstaendnis', 'Mathematisches Verständnis', 15, [
-        'Ich kann Sachprobleme auf mathematische Fragestellungen reduzieren und mathematische Darstellungen auf Sachprobleme beziehen.',
-        'Ich kann die meisten Sachprobleme auf mathematische Fragestellungen reduzieren und mathematische Darstellungen meistens auf Sachprobleme beziehen.',
-        'Ich kann den Zusammenhang zwischen Sachproblemen und mathematischen Darstellungen erläutern.',
-        'Ich kann den Zusammenhang zwischen Sachproblemen und mathematischen Darstellungen nachvollziehen.',
-        'Ich kann den Zusammenhang zwischen Sachproblemen und mathematischen Darstellungen nur selten nachvollziehen.',
-        'Ich kann den Zusammenhang zwischen Sachproblemen und mathematischen Darstellungen nicht nachvollziehen.',
-      ]],
-      ['hilfsmittel', 'Umgang mit Hilfsmitteln', 10, [
-        'Ich kann geeignete digitale und analoge Hilfsmittel (TR, GeoGebra, Excel, Zeichenwerkzeuge) auswählen und sicher mit ihnen umgehen.',
-        'Ich kann meistens geeignete digitale und analoge Hilfsmittel (TR, GeoGebra, Excel, Zeichenwerkzeuge) auswählen und sicher mit ihnen umgehen.',
-        'Ich weiß, wofür digitale und analoge Hilfsmittel (TR, GeoGebra, Excel, Zeichenwerkzeuge) verwendet werden und kann mit ihnen umgehen.',
-        'Ich kann mit digitalen und analogen Hilfsmitteln (TR, GeoGebra, Excel, Zeichenwerkzeuge) umgehen.',
-        'Ich bin unsicher im Umgang mit digitalen und analogen Hilfsmitteln (TR, GeoGebra, Excel, Zeichenwerkzeuge).',
-        'Ich kann nicht mit digitalen und analogen Hilfsmitteln (TR, GeoGebra, Excel, Zeichenwerkzeuge) umgehen.',
       ]],
     ]),
   ];
