@@ -1,18 +1,21 @@
 # Pult.
 
 Eine Webapp zur vertraulichen Verwaltung von Noten für Lehrkräfte. Ideal für Dienstgeräte. 
-Eine Version kann über https://schule.schrickel.cc/pult verwendet werden. 
+Eine Version kann über https://schule.schrickel.cc/pult verwendet werden. Hier gibt es allerdings keine Garantie, das die App dauerhaft online bleibt. 
 
 ## Funktionen
 Pult. läuft, nachdem die Webapp hinzugefügt wurde, komplett offline und alle Daten bleiben auf dem Gerät. Dabei nutzt es den internen Speicher des Browsers. Daher empfiehlt es sich, die Website als Webapp hinzuzufügen, damit ein Löschen des Chaches nicht die Daten der Anwendung löscht. 
 
 Mit Pult kann man:
-- Klassen und die Noten der Schüler verwalten. 
-- Notenüberischten drucken.
+- Klassen und die Noten der Schülerinnen und Schüler verwalten.
+- Tendenzen der SuS untersuchen.
+- Notenübersichten drucken.
 - Bewertungsraster anlegen und ausfüllen (mit Selbsteinschätzung).
 - Sitzpläne anlegen und direkt im Plan Noten, Hausaufgaben, etc. bearbeiten.
 - Zufällige Gruppen bilden.
 - Todos und Termine anlegen.
+- Seinen Stundenplan verwalten.
+- Sämtliche Daten komplett, pseudonym oder verschlüsselt als *.json exportieren. 
 
 ## Pult. einsetzen
 
