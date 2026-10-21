@@ -37,7 +37,6 @@ function rasterExample(id, name, crits) {
   const levels = RASTER_STD_LEVELS();
   return {
     id, name, subject: '', intro: RASTER_INTRO, levels,
->>>>>>> github/main
     criteria: crits.map(([cid, label, weight, texts]) => ({
       id: cid, label, weight,
       texts: Object.fromEntries(levels.map((l, i) => [l.id, texts[i] || ''])),

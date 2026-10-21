@@ -23,7 +23,6 @@ Am besten auf einem eigenen Webspace hochladen. Es empfiehlt sich regelmäßig e
 In der Regel ist es erforderlich, eine PIN-Sperre hinzuzufügen. Diese ist mit Touch/Face-Id verknüpfbar, dies ist auf Dienstgeräten jedoch meist deaktiviert. 
 
 Beim Hochladen auf den eigenen Server sollte die datenschutz.html ggf. angepasst werden. Diese ist nur als nicht rechtlich geprüfter Vorschlag zu verstehen. 
->>>>>>> github/main
 
 
 ## Neue Version veröffentlichen
