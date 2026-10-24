@@ -2214,6 +2214,12 @@ function renderTable(c) {
   const zwMCols = zwCols.filter(x => x.source === 'muendlich');
   const zwHeadOf = cols => cols.map(col => `<th class="grp-prev zw-head" data-zw="${col.id}">${esc(col.label||'Zwischenstand')}${col.source==='muendlich'?'<span class="ch-tags"><span class="pill">mündl.</span></span>':''}<span class="ch-date">${fmtDate(col.date)}</span></th>`).join('');
   const zwHead = zwHeadOf(zwCols);
+  // Invertiert reihen sich Zwischenstände nach Datum in die mündlichen Spalten ein (bei gleichem Datum vor den Noten)
+  const isZw = col => col.type === 'zwischenstand';
+  const byNewestZw = (a, b) => byNewest(a, b) || isZw(b) - isZw(a);
+  const muendZwInv = muendCols.concat(zwCols).sort(byNewestZw);
+  const muendZwMInv = muendCols.concat(zwMCols).sort(byNewestZw);
+  const headMixed = cols => cols.map(col => isZw(col) ? zwHeadOf([col]) : headCols([col], 'grp-muend')).join('');
   const haHead = `<th class="grp-ha ha-head" title="Hausaufgaben: gemacht / fehlt">HA / Fehlt</th>`;
 
   let thead = `<tr><th class="col-name">Schüler:in</th>`;
@@ -2239,8 +2245,7 @@ function renderTable(c) {
     thead += `<th class="grp-schrift">Ø schr.</th>`;
     thead += headCols(schriftInv, 'grp-schrift');
     thead += `<th class="grp-muend">Ø mündl.</th>`;
-    thead += headCols(muendInv, 'grp-muend');
-    thead += zwHead;
+    thead += headMixed(muendZwInv);
   } else if (inverted && showS) {   // invertierter Schriftlich-Tab
     thead += headSonst(sonstS);
     thead += `<th class="grp-schrift">Ø schr.</th>`;
@@ -2248,8 +2253,7 @@ function renderTable(c) {
   } else if (inverted && showM) {   // invertierter Mündlich-Tab
     thead += headSonst(sonstM);
     thead += `<th class="grp-muend">Ø mündl.</th>`;
-    thead += headCols(muendInv, 'grp-muend');
-    thead += zwHeadOf(zwMCols);
+    thead += headMixed(muendZwMInv);
   } else {
     if (route.hy === '2') thead += `<th class="grp-prev">Ges. HJ1</th>`;
     if (showS) { thead += headCols(schriftCols, 'grp-schrift'); thead += `<th class="grp-schrift">Ø schr.</th>`; thead += headSonst(sonstS); }
@@ -2323,8 +2327,7 @@ function renderTable(c) {
       tr += `<td class="avg">${avgCell(comp.wAvg)}</td>`;
       schriftInv.forEach(col => tr += gradeTd(col));
       tr += `<td class="avg">${avgCell(comp.mAvg)}</td>`;
-      muendInv.forEach(col => tr += gradeTd(col));
-      zwCols.forEach(col => tr += zwTd(col));
+      muendZwInv.forEach(col => tr += isZw(col) ? zwTd(col) : gradeTd(col));
     } else if (inverted && showS) {
       sonstS.forEach(so => tr += sonstCell(s.id, so.id));
       tr += `<td class="avg">${avgCell(comp.wAvg)}</td>`;
@@ -2332,8 +2335,7 @@ function renderTable(c) {
     } else if (inverted && showM) {
       sonstM.forEach(so => tr += sonstCell(s.id, so.id));
       tr += `<td class="avg">${avgCell(comp.mAvg)}</td>`;
-      muendInv.forEach(col => tr += gradeTd(col));
-      zwMCols.forEach(col => tr += zwTd(col));
+      muendZwMInv.forEach(col => tr += isZw(col) ? zwTd(col) : gradeTd(col));
     } else {
       if (route.hy === '2') {
         const g1 = effGesamt(c, '1', s.id).value;

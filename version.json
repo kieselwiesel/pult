@@ -1,7 +1,14 @@
 {
-  "version": "1.0.7",
-  "date": "2026-10-21",
+  "version": "1.0.8",
+  "date": "2026-10-24",
   "changelog": [
+    {
+      "version": "1.0.8",
+      "date": "2026-10-24",
+      "changes": [
+        "Invertierte Notentabelle: Zwischenstände reihen sich nach ihrem Datum zwischen die mündlichen Noten ein, statt ganz rechts zu stehen"
+      ]
+    },
     {
       "version": "1.0.7",
       "date": "2026-10-21",
