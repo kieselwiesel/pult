@@ -486,10 +486,13 @@ input[type=range] { width: 100%; min-width: 0; }
 .topbar-settings.active { background: rgba(255,255,255,.16); color: #fff; }
 
 /* ---------- Zurück (fest unten links) ---------- */
+/* Von oben verankert wie die Topbar: iPadOS lässt mit bottom fixierte Elemente
+   beim Scrollen langer Seiten mitwandern. */
 .backfab {
   position: fixed; z-index: 60;
   left: max(16px, env(safe-area-inset-left));
-  bottom: max(16px, env(safe-area-inset-bottom));
+  top: calc(100vh - 42px - max(16px, env(safe-area-inset-bottom)));
+  top: calc(100dvh - 42px - max(16px, env(safe-area-inset-bottom)));
   appearance: none; font: inherit; cursor: pointer;
   width: 42px; height: 42px; padding: 0;
   display: inline-flex; align-items: center; justify-content: center;

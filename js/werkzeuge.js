@@ -2,7 +2,7 @@
    Pult. — Werkzeuge im Kurs (unter „Mehr")
    ------------------------------------------------------------
    Gruppen bilden: Größe oder Anzahl, „heute fehlt", Regeln (nie / immer
-   zusammen), optional leistungsgemischt. Ergebnis lässt sich von Hand
+   zusammen), zufällig, leistungsgemischt oder leistungshomogen. Ergebnis lässt sich von Hand
    umsortieren, speichern, groß zeigen (Beamer) und drucken.
      c.groups = { rules: [{ id, type: 'apart'|'together', a, b }],
                   saved: [{ id, name, date, groups: [[sId]] }],
@@ -54,7 +54,13 @@ function ensureGroups(c) {
   if (!c.groups.saved) c.groups.saved = [];
   return c.groups;
 }
-const groupOpts = () => Object.assign({ mode: 'size', size: 4, count: 6, mixed: false }, data.meta.groupOpts || {});
+/* perf: 'random' | 'mixed' (leistungsgemischt) | 'same' (leistungshomogen); früher nur mixed: true/false */
+const groupOpts = () => {
+  const o = Object.assign({ mode: 'size', size: 4, count: 6 }, data.meta.groupOpts || {});
+  if (!o.perf) o.perf = o.mixed ? 'mixed' : 'random';
+  delete o.mixed;
+  return o;
+};
 let groupMove = null;    // angetippte Person beim Umsortieren
 
 /* Regeln prüfen: Liste der verletzten Regeln */
@@ -87,12 +93,16 @@ function buildGroups(c, ids, opts, rules) {
   const apart = act.filter(r => r.type === 'apart');
   const conflicts = (block, group) => apart.some(r => (block.includes(r.a) && group.includes(r.b)) || (block.includes(r.b) && group.includes(r.a)));
   const grade = id => { const g = currentGrade(c, id); return g == null ? 7.5 : g; };
+  const mixed = opts.perf === 'mixed', same = opts.perf === 'same';
 
   let best = null;
   for (let attempt = 0; attempt < 400; attempt++) {
     let order = [...blocks.values()].map(b => ({ b, r: Math.random(), avg: b.reduce((a, id) => a + grade(id), 0) / b.length }));
-    /* große Blöcke zuerst; leistungsgemischt: stärkste zuerst, damit sie sich verteilen */
-    order.sort((x, y) => (y.b.length - x.b.length) || (opts.mixed ? (y.avg - x.avg) + (x.r - y.r) * 2 : x.r - y.r));
+    /* leistungshomogen: nur nach Note sortieren, etwas Zufall gegen immer gleiche Einteilung —
+       wächst mit den Versuchen, falls Regeln oder Blockgrößen nicht aufgehen.
+       Sonst große Blöcke zuerst; leistungsgemischt: stärkste zuerst, damit sie sich verteilen */
+    if (same) order.sort((x, y) => (y.avg - x.avg) + (x.r - y.r) * (1.5 + attempt / 40));
+    else order.sort((x, y) => (y.b.length - x.b.length) || (mixed ? (y.avg - x.avg) + (x.r - y.r) * 2 : x.r - y.r));
     const groups = Array.from({ length: k }, () => []);
     const sums = new Array(k).fill(0);
     let bad = 0;
@@ -101,13 +111,14 @@ function buildGroups(c, ids, opts, rules) {
       if (!cand.length) cand = groups.map((g, i) => i).filter(i => !conflicts(b, groups[i]));
       if (!cand.length) { cand = groups.map((g, i) => i); bad++; }
       /* leistungsgemischt: reihum (wer am wenigsten hat, zuerst), und die jeweils
-         stärkste verbleibende Person geht an die Gruppe mit der kleinsten Summe */
-      cand.sort((i, j) => opts.mixed
+         stärkste verbleibende Person geht an die Gruppe mit der kleinsten Summe.
+         leistungshomogen: Gruppen der Reihe nach auffüllen (cand ist schon nach Index sortiert) */
+      if (!same) cand.sort((i, j) => mixed
         ? (groups[i].length - groups[j].length) || (sums[i] - sums[j])
         : (groups[i].length - cap[i]) - (groups[j].length - cap[j]) || Math.random() - 0.5);
       /* bei Gleichstand zufällig unter den besten wählen */
-      const top = cand.filter(i => opts.mixed ? true : (groups[i].length - cap[i]) === (groups[cand[0]].length - cap[cand[0]]));
-      const pick = opts.mixed ? cand[0] : top[Math.floor(Math.random() * top.length)];
+      const top = cand.filter(i => (groups[i].length - cap[i]) === (groups[cand[0]].length - cap[cand[0]]));
+      const pick = mixed || same ? cand[0] : top[Math.floor(Math.random() * top.length)];
       groups[pick].push(...b);
       sums[pick] += b.reduce((a, id) => a + grade(id), 0);
     }
@@ -118,6 +129,8 @@ function buildGroups(c, ids, opts, rules) {
     if (score === 0) break;
   }
   best.groups.forEach(g => g.sort(() => Math.random() - 0.5));
+  /* leistungshomogen: Reihenfolge mischen, sonst wäre Gruppe 1 immer die stärkste */
+  if (same) best.groups.sort(() => Math.random() - 0.5);
   return best;
 }
 
@@ -162,7 +175,8 @@ function renderGruppen() {
             <b id="grNum">${o.mode === 'count' ? o.count : o.size}</b>
             <button class="btn small" id="grPlus">+</button>
             <span class="cs-sub" id="grNumHint"></span></div>
-          <label class="check-row"><input type="checkbox" id="grMixed" ${o.mixed ? 'checked' : ''}><span>Leistungsgemischt <small>nach aktueller Note</small></span></label>
+          <h3 style="margin-top:12px">Leistung <span class="cs-sub">— nach aktueller Note</span></h3>
+          ${pdSeg('grPerf', [['random', 'Zufällig'], ['mixed', 'Gemischt'], ['same', 'Homogen']], o.perf)}
           <button class="btn primary" id="grBuild" style="width:100%;margin-top:6px">${cur ? 'Neu mischen' : 'Gruppen bilden'}</button>
         </div>
         <div class="calc-block">
@@ -207,7 +221,7 @@ function renderGruppen() {
   };
   document.getElementById('grMinus').onclick = () => step(-1);
   document.getElementById('grPlus').onclick = () => step(1);
-  document.getElementById('grMixed').onchange = e => { o.mixed = e.target.checked; keepOpts(); };
+  pdBindSeg('grPerf', v => { o.perf = v; keepOpts(); });
   document.getElementById('grBuild').onclick = () => {
     const res = buildGroups(c, present.map(s => s.id), o, G.rules);
     G.current = { groups: res.groups, absent: [...absent] };
