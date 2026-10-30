@@ -123,7 +123,8 @@ function updateSectionHtml() {
       </div>
       <div class="hint">Pult. läuft komplett offline und ändert sich nur, wenn du hier ein Update übernimmst. Vorher wird automatisch ein interner Sicherungsstand angelegt.</div>
     </div>
-    ${v && v.changelog ? `<details class="upd-log"><summary>Was ist neu in dieser Version?</summary>${changelogHtml(v.changelog.filter(e => e.version === v.version))}</details>` : ''}`;
+    ${v && v.changelog ? `<details class="upd-log"><summary>Was ist neu in dieser Version?</summary>${changelogHtml(v.changelog.filter(e => e.version === v.version))}</details>
+    <details class="upd-log"><summary>Alle Versionen (${v.changelog.length})</summary>${changelogHtml(v.changelog.slice().sort((a, b) => cmpVersion(b.version, a.version)))}</details>` : ''}`;
 }
 function updateAvailableHtml() {
   const entries = changesSince(updateInfo, appVersion ? appVersion.version : '0');

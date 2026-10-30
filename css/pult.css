@@ -908,6 +908,7 @@ table.rs-ed-grid textarea { min-height: 120px; font-size: 13px; line-height: 1.4
 .cl-entry ul { margin: 4px 0 0; padding-left: 20px; }
 .cl-entry li + li { margin-top: 2px; }
 .upd-log { margin-top: 14px; }
+.upd-log + .upd-log { margin-top: 8px; }
 .upd-log summary { cursor: pointer; font-size: 14px; font-weight: 600; color: var(--ink-soft); }
 
 /* ---------- Werkzeuge: Gruppen, Zufall, Timer ---------- */

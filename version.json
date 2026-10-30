@@ -6,7 +6,8 @@
       "version": "1.0.11",
       "date": "2026-10-30",
       "changes": [
-        "Startseite: Hinweis „Jetzt“ über dem Stundenplan entfernt — die laufende Stunde ist im Raster markiert, jetzt auch bei Freitext-Stunden"
+        "Startseite: Hinweis „Jetzt“ über dem Stundenplan entfernt — die laufende Stunde ist im Raster markiert, jetzt auch bei Freitext-Stunden",
+        "Einstellungen → Über Pult.: unter „Alle Versionen“ steht der komplette Versionsverlauf"
       ]
     },
     {
