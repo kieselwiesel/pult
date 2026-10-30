@@ -998,10 +998,6 @@ table.rs-ed-grid textarea { min-height: 120px; font-size: 13px; line-height: 1.4
 /* Zoomen erlaubt, aber kein Doppeltipp-Zoom; Eingabefelder ≥ 16 px, sonst zoomt iOS beim Antippen */
 html { touch-action: manipulation; }
 @media (pointer: coarse) { input, select, textarea { font-size: 16px !important; } }
-.now-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; background: var(--card); border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 14px; box-shadow: var(--shadow); font-size: 15px; }
-.now-bar > span:nth-child(2) { flex: 1; min-width: 180px; }
-.now-tag { font-size: 11px; font-weight: 750; text-transform: uppercase; letter-spacing: .08em; color: #fff; background: var(--accent); padding: 3px 8px; border-radius: var(--radius); }
-.now-sub { color: var(--ink-faint); font-size: 13px; margin-left: 4px; }
 td.tt-cell.tt-now .tt-lesson { box-shadow: 0 0 0 2px var(--accent); }
 .topbar-search { color: #eaf3f1; }
 .topbar-search:hover { background: rgba(255,255,255,.14); }

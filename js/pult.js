@@ -1259,7 +1259,7 @@ function renderHome() {
       if (l && l.placeholder) {
         const label = esc(l.label || 'Freitext');
         const mark = ab && (l.week || 0) ? `<span class="tt-ab">${AB_LABEL[l.week]}</span>` : '';
-        return `<td class="tt-cell ${isToday ? 'tt-today' : ''}">
+        return `<td class="tt-cell ${isToday ? 'tt-today' : ''} ${isNow ? 'tt-now' : ''}">
           <button class="tt-lesson tt-placeholder" data-day="${day}" data-period="${pi}" ${planEdit ? '' : 'disabled'}>
             ${mark}<span class="tt-subject">${label}</span><span class="tt-meta">${esc(l.room || '')}</span></button></td>`;
       }
@@ -1323,7 +1323,6 @@ function renderHome() {
     ${planEdit ? `<div class="notice">Tippe auf ein Feld, um einen Kurs einzutragen oder zu ändern.</div>`
       : (hasLessons ? '' : `<div class="notice">Noch keine Stunden eingetragen. Tippe auf <b>Plan bearbeiten</b> und fülle das Raster.</div>`)}
 
-    ${planEdit ? '' : nowBarHtml()}
     ${weekTabs}
 
     <div class="tt-wrap">
@@ -1339,9 +1338,6 @@ function renderHome() {
   `;
 
   document.getElementById('backupHint').onclick = exportBackup;
-  app().querySelectorAll('[data-now]').forEach(b => b.onclick = () => {
-    const c = getCourse(b.dataset.now); if (c) go({ name: 'course', courseId: c.id, hy: defaultHalfYear(c), view: 'simpel' });
-  });
   document.getElementById('dashFerien').onclick = () => go({ name: 'settings', setPage: 'schuljahr' });
   document.getElementById('dashZeugnis').onclick = () => go({ name: 'settings', setPage: 'schuljahr' });
   document.getElementById('dashTodos').onclick = () => go({ name: 'todos' });

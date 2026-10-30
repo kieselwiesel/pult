@@ -37,15 +37,6 @@ function lessonNow() {
   });
   return { now, next };
 }
-function nowBarHtml() {
-  const { now } = lessonNow();
-  const label = x => x.course ? `${esc(x.course.subject)} ${esc(x.course.className)}` : esc(x.lesson.label || 'Freitext');
-  const room = x => x.lesson.room ? ` · ${esc(x.lesson.room)}` : '';
-  if (now) return `<div class="now-bar"><span class="now-tag">Jetzt</span>
-    <span><b>${label(now)}</b>${room(now)} <span class="now-sub">${esc(now.period.label)} Std., bis ${now.period.end} Uhr</span></span>
-    ${now.course ? `<button class="btn small primary" data-now="${now.course.id}">Kurs öffnen</button>` : ''}</div>`;
-  return '';
-}
 /* Startseite jede Minute auffrischen, sobald eine Stunde beginnt oder endet */
 let nowKey = '';
 setInterval(() => {
