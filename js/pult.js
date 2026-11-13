@@ -1897,8 +1897,10 @@ function renderCourse() {
   const c = getCourse(route.courseId);
   if (!c) return go({ name: 'home' });
   const hy = c.halfYears[route.hy];
+  /* „ZS" (nur Zwischenstände) gibt es nur, wenn das Halbjahr welche hat */
+  const hasZw = hy.columns.some(x => x.type === 'zwischenstand');
   /* Ansicht einer Kategorie, die es im Kurs nicht (mehr) gibt → Gesamt */
-  if (!['simpel', 'gesamt'].includes(route.view) && !courseCats(c).some(k => k.id === route.view)) route.view = 'gesamt';
+  if (!['simpel', 'gesamt'].concat(hasZw ? ['zs'] : []).includes(route.view) && !courseCats(c).some(k => k.id === route.view)) route.view = 'gesamt';
 
   app().innerHTML = `
     <div class="page-head">
@@ -1922,7 +1924,7 @@ function renderCourse() {
 
     <div class="toolbar">
       ${segWithMore('viewSeg', [['simpel', 'Simpel'], ['gesamt', 'Gesamt'], ['schriftlich', 'Schriftlich'], ['muendlich', 'Mündlich']],
-        courseCats(c).filter(k => !k.std).map(k => [k.id, k.name]), route.view)}
+        courseCats(c).filter(k => !k.std).map(k => [k.id, k.name]), route.view, '', hasZw ? [['zs', 'ZS']] : [])}
       <div class="spacer"></div>
       <button class="btn small" id="btnAdd">+ Leistung</button>
       <button class="btn small primary" id="btnDurch">Durchtippen</button>
@@ -1978,7 +1980,8 @@ function zwSourceName(col) {
 }
 /* Segment-Umschalter mit Überlauf: die festen Einträge als Knöpfe, weitere
    (eigene Kategorien) bei einer als Knopf, ab zwei in einem Auswahlfeld. */
-function segWithMore(id, items, more, cur, style) {
+/* after: feste Einträge hinter den weiteren (z. B. „ZS") */
+function segWithMore(id, items, more, cur, style, after) {
   more = more || [];
   const btn = ([v, l]) => `<button type="button" data-v="${esc(v)}" class="${v === cur ? 'active' : ''}">${esc(l)}</button>`;
   const inMore = more.some(([v]) => v === cur);
@@ -1987,7 +1990,7 @@ function segWithMore(id, items, more, cur, style) {
         <option value="" ${inMore ? '' : 'selected'}>Weitere …</option>
         ${more.map(([v, l]) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`
     : more.map(btn).join('');
-  return `<div class="seg" id="${id}" ${style ? `style="${style}"` : ''}>${items.map(btn).join('')}${sel}</div>`;
+  return `<div class="seg" id="${id}" ${style ? `style="${style}"` : ''}>${items.map(btn).join('')}${sel}${(after || []).map(btn).join('')}</div>`;
 }
 function bindSegWithMore(id, onPick) {
   const root = document.getElementById(id); if (!root) return;
@@ -2501,6 +2504,7 @@ function renderTable(c) {
   const scale = c.scale || 'punkte';
   const isSimpel = route.view === 'simpel';
   const isGesamt = route.view === 'gesamt';
+  const isZsView = route.view === 'zs';
   const cats = courseCats(c);
   const viewCat = cats.find(k => k.id === route.view) || null;   // Ansicht einer einzelnen Kategorie
   const colsOf = id => hy.columns.filter(x => x.type === id);
@@ -2559,11 +2563,16 @@ function renderTable(c) {
       td: (s, x) => `<td class="grade-cell" data-s="${s.id}" data-col="${col.id}">${cell(x.gr[col.id])}</td>`,
     });
   };
-  const pushZw = col => {
+  /* grp: in der ZS-Ansicht — Farbe der Quelle, Plakette auch für „Gesamt",
+     Trennlinie vor der ersten Spalte einer Gruppe */
+  const pushZw = (col, grp) => {
     const src = col.source || 'gesamt';
+    const cls = grp ? (src === 'gesamt' ? 'grp-prev' : catGrpClass(src)) + (grp.start ? ' zs-start' : '') : 'grp-prev';
+    const style = grp && src !== 'gesamt' ? catGrpStyle(src) : '';
+    const pill = src !== 'gesamt' ? catDef(src).short : grp ? 'Gesamt' : '';
     D.push({
-      head: `<th class="grp-prev zw-head" data-zw="${col.id}">${esc(col.label||'Zwischenstand')}${src !== 'gesamt' ? `<span class="ch-tags"><span class="pill">${esc(catDef(src).short)}</span></span>` : ''}<span class="ch-date">${fmtDate(col.date)}</span></th>`,
-      td: s => zwTd(s, col),
+      head: `<th class="${cls} zw-head" ${style ? `style="${style}"` : ''} data-zw="${col.id}">${esc(col.label||'Zwischenstand')}${pill ? `<span class="ch-tags"><span class="pill">${esc(pill)}</span></span>` : ''}<span class="ch-date">${fmtDate(col.date)}</span></th>`,
+      td: s => zwTd(s, col).replace('<td class="prev-cell zw-cell"', `<td class="prev-cell zw-cell${grp && grp.start ? ' zs-start' : ''}"`),
     });
   };
   const pushMixed = (cols, catId) => cols.forEach(col => isZw(col) ? pushZw(col) : pushCol(col, catId));
@@ -2615,9 +2624,18 @@ function renderTable(c) {
     cats.forEach(k => { colsOf(k.id).forEach(col => pushCol(col, k.id)); pushAvg(k.id); pushSonst(sonstOf(k.id)); });
     pushSonst(sonstOf('allgemein'));
     pushHA();
-    zwCols.forEach(pushZw);
+    zwCols.forEach(col => pushZw(col));
     pushGesamt(route.hy !== '2');   // Standard: Gesamt ist letzte Spalte (HJ1)
     pushEnd(true);
+  } else if (isZsView) {
+    /* aktueller Gesamtstand, dann die Zwischenstände nach Quelle gruppiert:
+       Gesamt, Mündlich, Schriftlich, eigene Kategorien — je Gruppe neueste
+       zuerst bzw. von links nach rechts */
+    pushGesamt(false);
+    const order = ['gesamt', 'muendlich', 'schriftlich'].concat(cats.filter(k => !k.std).map(k => k.id));
+    zwCols.forEach(col => { if (!order.includes(col.source || 'gesamt')) order.push(col.source); });   // Quelle ohne Kategorie im Kurs
+    const sorted = list => inverted ? newest(list) : list.slice().sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+    order.forEach(id => sorted(zwOf(id)).forEach((col, i) => pushZw(col, { start: i === 0 })));
   } else if (viewCat && inverted) {
     pushSonst(sonstOf(viewCat.id));
     pushAvg(viewCat.id);
@@ -2627,7 +2645,7 @@ function renderTable(c) {
     colsOf(viewCat.id).forEach(col => pushCol(col, viewCat.id));
     pushAvg(viewCat.id);
     pushSonst(sonstOf(viewCat.id));
-    zwOf(viewCat.id).forEach(pushZw);
+    zwOf(viewCat.id).forEach(col => pushZw(col));
   }
 
   const thead = `<tr><th class="col-name">Schüler:in</th>${D.map(d => d.head).join('')}</tr>`;
