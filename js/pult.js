@@ -866,7 +866,7 @@ function targetOptions(scale, current) {
   return out;
 }
 /* Blinde Flecken: keine (aktuelle) mündliche Note */
-/* Tage ohne mündliche Note, ab denen jemand als „blinder Fleck" gilt (Einstellungen → Noten) */
+/* Tage ohne mündliche Note, ab denen jemand als „blinder Fleck" gilt (Einstellungen → Darstellung) */
 const blindDays = () => Number(data.meta.blindDays) || 21;
 function blindSpot(course, hyKey, sId) {
   const cols = course.halfYears[hyKey].columns.filter(c => c.type === 'muendlich');

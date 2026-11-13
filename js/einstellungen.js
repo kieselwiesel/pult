@@ -14,8 +14,8 @@
 const SET_PAGES = [
   { key: 'schuljahr',   title: 'Schuljahr',        sub: 'Ferien, Zeugniskonferenz, Halbjahr' },
   { key: 'stundenplan', title: 'Stundenplan',      sub: 'Rhythmus und Stundenzeiten' },
-  { key: 'noten',       title: 'Darstellung',      sub: 'Hell/Dunkel, Notentabelle, neue Kurse' },
-  { key: 'kategorien',  title: 'Notenkategorien',  sub: 'Eigene Kategorien, Gewichtung neuer Kurse' },
+  { key: 'darstellung', title: 'Darstellung',      sub: 'Hell/Dunkel, Notentabelle' },
+  { key: 'noten',       title: 'Noten',            sub: 'Kategorien, Vorgaben für neue Kurse' },
   { key: 'raster',      title: 'Bewertungsraster', sub: 'Vorlagen für Einschätzungen' },
   { key: 'sicherheit',  title: 'Sicherheit',       sub: 'App-Sperre' },
   { key: 'daten',       title: 'Daten',            sub: 'Backup, Sicherungsstände, Speicher' },
@@ -33,6 +33,7 @@ function courseDefaults() {
 }
 
 function renderSettings() {
+  if (route.setPage === 'kategorien') route.setPage = 'noten';   // frühere Seite „Notenkategorien"
   const page = SET_PAGES.some(p => p.key === route.setPage) ? route.setPage : null;
   const shown = page || 'schuljahr';
   const nav = SET_PAGES.map(p => {
@@ -58,7 +59,7 @@ function renderSettings() {
   document.getElementById('setBack').onclick = () => go({ name: 'settings', setPage: null });
 
   const body = document.getElementById('setBody');
-  ({ schuljahr: setSchuljahr, stundenplan: setStundenplan, noten: setNoten, kategorien: setKategorien, raster: setRaster,
+  ({ schuljahr: setSchuljahr, stundenplan: setStundenplan, darstellung: setDarstellung, noten: setNoten, raster: setRaster,
      sicherheit: setSicherheit, daten: setDaten, ueber: setUeber })[shown](body);
 }
 const setSaved = () => { save(); toast('Gespeichert.'); };
@@ -250,8 +251,8 @@ function setStundenplan(body) {
 }
 
 /* ---------- Noten ---------- */
-function setNoten(body) {
-  const m = data.meta, cd = courseDefaults();
+function setDarstellung(body) {
+  const m = data.meta;
   body.innerHTML = `
     <section class="set-card">
       <div class="field"><label>Erscheinungsbild</label>
@@ -271,36 +272,18 @@ function setNoten(body) {
         <select id="mBlind">${[14, 21, 28, 42].map(d => `<option value="${d}" ${blindDays() === d ? 'selected' : ''}>nach ${d} Tagen</option>`).join('')}</select>
         <div class="hint">Markiert Schüler:innen mit einem Punkt, deren letzte mündliche Note länger zurückliegt.</div>
       </div>
-    </section>
-    <section class="set-card">
-      <h2>Vorgaben für neue Kurse</h2>
-      <div class="field"><label>Notensystem</label>
-        <select id="mScale">
-          <option value="punkte" ${cd.scale === 'punkte' ? 'selected' : ''}>Punkte 0–15</option>
-          <option value="noten" ${cd.scale === 'noten' ? 'selected' : ''}>Noten 1–6 mit Tendenz</option>
-        </select></div>
-      <div class="field"><label>1. Halbjahr % (Endjahr)</label><input id="mWH" type="number" min="0" max="100" value="${cd.weightHY1}"></div>
-      <div class="hint" style="margin-top:6px">Die Gewichtung der Kategorien steht unter <a href="#" id="mToCats">Notenkategorien</a>. Bestehende Kurse bleiben unverändert — dort unter <b>Mehr → Kurs bearbeiten</b>.</div>
     </section>`;
-  document.getElementById('mLayout').onchange = e => { m.tableLayout = e.target.value || 'invers'; setSaved(); };
   document.getElementById('mTheme').onchange = e => { m.theme = e.target.value; applyTheme(); setSaved(); };
+  document.getElementById('mLayout').onchange = e => { m.tableLayout = e.target.value || 'invers'; setSaved(); };
   document.getElementById('mBlind').onchange = e => { m.blindDays = Number(e.target.value) || 21; setSaved(); };
-  const keep = () => {
-    m.courseDefaults = Object.assign({}, m.courseDefaults || {}, {
-      scale: val('mScale') || 'punkte',
-      weightHY1: clamp(parseInt(val('mWH'), 10) || 0, 0, 100),
-    });
-    setSaved();
-  };
-  ['mScale', 'mWH'].forEach(id => document.getElementById(id).onchange = keep);
-  document.getElementById('mToCats').onclick = e => { e.preventDefault(); go({ name: 'settings', setPage: 'kategorien' }); };
 }
 
-/* ---------- Notenkategorien ----------
+/* ---------- Noten ----------
+   Kategorien und Vorgaben für neue Kurse (die Notentabelle steht unter Darstellung).
    Eigene Kategorien gelten für alle Kurse; welche ein Kurs führt und wie
-   stark sie dort zählen, steht im Kurs (Kurs bearbeiten). Hier außerdem die
-   Gewichtung, mit der neue Kurse starten. */
-function setKategorien(body) {
+   stark sie dort zählen, steht im Kurs (Kurs bearbeiten). */
+function setNoten(body) {
+  const m = data.meta, cd0 = courseDefaults();
   const list = customCats();
   const usage = id => {
     let courses = 0, cols = 0;
@@ -332,10 +315,24 @@ function setKategorien(body) {
       <div class="hint" style="margin-top:8px">Eigene Kategorien stehen allen Kursen zur Verfügung. Im Kurs nimmst du sie unter <b>Mehr → Kurs bearbeiten</b> auf und legst die Gewichtung fest — oder direkt über <b>+ Leistung → Kategorie-Note</b>.</div>
     </section>
     <section class="set-card">
-      <h2>Gewichtung für neue Kurse</h2>
-      <div id="kDefaults"></div>
-      <div class="hint" style="margin-top:6px">Eigene Kategorien mit 0 % werden in neuen Kursen nicht angelegt. Bestehende Kurse bleiben unverändert.</div>
+      <h2>Vorgaben für neue Kurse</h2>
+      <div class="field"><label>Notensystem</label>
+        <select id="mScale">
+          <option value="punkte" ${cd0.scale === 'punkte' ? 'selected' : ''}>Punkte 0–15</option>
+          <option value="noten" ${cd0.scale === 'noten' ? 'selected' : ''}>Noten 1–6 mit Tendenz</option>
+        </select></div>
+      <div class="field"><label>Gewichtung der Kategorien</label><div id="kDefaults"></div></div>
+      <div class="field"><label>1. Halbjahr % (Endjahr)</label><input id="mWH" type="number" min="0" max="100" value="${cd0.weightHY1}"></div>
+      <div class="hint" style="margin-top:6px">Eigene Kategorien mit 0 % werden in neuen Kursen nicht angelegt. Bestehende Kurse bleiben unverändert — dort unter <b>Mehr → Kurs bearbeiten</b>.</div>
     </section>`;
+  const keepDefaults = () => {
+    m.courseDefaults = Object.assign({}, m.courseDefaults || {}, {
+      scale: val('mScale') || 'punkte',
+      weightHY1: clamp(parseInt(val('mWH'), 10) || 0, 0, 100),
+    });
+    setSaved();
+  };
+  ['mScale', 'mWH'].forEach(id => document.getElementById(id).onchange = keepDefaults);
   document.getElementById('kNew').onclick = () => openCategoryForm(null, () => { closeModal(); renderSettings(); }, closeModal);
   body.querySelectorAll('[data-kedit]').forEach(b => b.onclick = () => openCategoryForm(b.dataset.kedit, () => { closeModal(); renderSettings(); }, closeModal));
   body.querySelectorAll('[data-kdel]').forEach(b => b.onclick = () => openCategoryDelete(b.dataset.kdel));
