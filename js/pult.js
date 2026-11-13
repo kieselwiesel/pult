@@ -1251,6 +1251,7 @@ function renderCourses() {
   const backupOverdue = backupIsOverdue();
 
   app().innerHTML = `
+    ${updateBannerHtml()}
     ${backupOverdue ? `<div class="notice" id="backupNote" style="display:flex;justify-content:space-between;align-items:center;gap:12px;border-color:var(--amber)">
       <span>${data.meta.lastBackup ? 'Letztes Backup: '+fmtDateLong(data.meta.lastBackup)+'.' : 'Noch kein Backup erstellt.'} Sichere deine Daten regelmäßig.</span>
       <button class="btn small" id="backupNow">Backup jetzt</button></div>` : ''}
@@ -1269,6 +1270,7 @@ function renderCourses() {
   document.getElementById('btnNewCourse').onclick = () => openCourseForm();
   document.getElementById('btnPrintAll').onclick = openAllCoursesPrint;
   const bn = document.getElementById('backupNow'); if (bn) bn.onclick = exportBackup;
+  bindUpdateBanner();
 
   const grid = document.getElementById('courseGrid');
   if (!data.courses.length) {
@@ -1388,6 +1390,7 @@ function renderHome() {
     </div>` : '';
 
   app().innerHTML = `
+    ${updateBannerHtml()}
     <section class="dash">
       <div class="dash-card clickable" id="dashFerien">
         <div class="label">${esc(data.meta.ferienLabel || 'Nächste Ferien')}</div>${weekTile(ferien, data.meta.ferienDatum)}
@@ -1433,6 +1436,7 @@ function renderHome() {
   `;
 
   document.getElementById('backupHint').onclick = exportBackup;
+  bindUpdateBanner();
   document.getElementById('dashFerien').onclick = () => go({ name: 'settings', setPage: 'schuljahr' });
   document.getElementById('dashZeugnis').onclick = () => go({ name: 'settings', setPage: 'schuljahr' });
   document.getElementById('dashTodos').onclick = () => go({ name: 'todos' });
@@ -3930,5 +3934,5 @@ dailySnapshot();
 loadAppVersion().then(() => {
   if (SETTINGS_SUBPAGES.includes(route.name)) render();
   else renderTopbarRight();
-  dailyUpdateCheck();
+  dailyUpdateCheck(true);
 });

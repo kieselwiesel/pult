@@ -906,6 +906,11 @@ table.rs-ed-grid textarea { min-height: 120px; font-size: 13px; line-height: 1.4
 .upd-new { margin-top: 12px; border: 1px solid var(--accent); border-left-width: 4px; border-radius: var(--radius); background: var(--accent-soft); padding: 12px 14px; }
 .upd-new .btn { margin-top: 10px; }
 .upd-ok { margin-top: 12px; color: var(--g-top); font-weight: 600; font-size: 14px; }
+/* Hinweis „Update verfügbar" (Startseite, Kursübersicht) */
+.upd-banner { display: flex; align-items: center; gap: 10px; border-style: solid; border-color: var(--accent); }
+.upd-banner .upd-dot { margin-left: 0; background: var(--accent); flex: none; }
+.upd-banner .upd-banner-t { flex: 1; color: var(--ink); }
+.upd-banner .upd-banner-x { flex: none; font-size: 20px; line-height: 1; }
 .cl-entry { margin-top: 8px; font-size: 14px; }
 .cl-head span { color: var(--ink-faint); font-size: 12.5px; margin-left: 4px; }
 .cl-entry ul { margin: 4px 0 0; padding-left: 20px; }

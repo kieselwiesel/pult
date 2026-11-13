@@ -7,14 +7,16 @@
    werden: Freigabe setzen → Service Worker neu laden → aktivieren → neu laden.
    Siehe sw.js.
 
-   Einmal am Tag wird beim Start still geprüft; ein neuer Stand zeigt sich
-   als Punkt am Einstellungen-Knopf — installiert wird nichts.
+   Automatische Suche (Einstellungen → Über Pult., standardmäßig aus): beim
+   Start und bei der ersten Nutzung eines neuen Tages wird einmal geprüft.
+   Ein neuer Stand zeigt sich als Hinweis auf Startseite und Kursübersicht
+   und als Punkt am Einstellungen-Knopf — installiert wird nichts.
 
    Wird vor pult.js geladen: hier stehen nur Definitionen.
    ============================================================ */
 'use strict';
 
-const UPDATE_KEY = 'pult.update.v1';   // { checkedAt, remote } — Gerätezustand, nicht im Backup
+const UPDATE_KEY = 'pult.update.v1';   // { checkedAt, remote, auto, dismissed } — Gerätezustand, nicht im Backup
 let appVersion = null;                 // installierte version.json
 let updateInfo = null;                 // neuere version.json vom Server, falls vorhanden
 
@@ -55,15 +57,45 @@ async function checkForUpdate(silent) {
     return 'offline';
   }
   const newer = appVersion && cmpVersion(remote.version, appVersion.version) > 0;
+  const had = updateInfo && updateInfo.version;
   updateInfo = newer ? remote : null;
-  saveUpdateState({ checkedAt: Date.now(), remote: newer ? remote : null });
+  saveUpdateState(Object.assign(loadUpdateState(), { checkedAt: Date.now(), remote: newer ? remote : null }));
   renderTopbarRight();
+  /* neuer Stand gefunden: Hinweis auf Start- bzw. Kursseite sofort zeigen */
+  if (silent && newer && remote.version !== had && ['home', 'courses'].includes(route.name)) render();
   return newer ? 'neu' : 'aktuell';
 }
-function dailyUpdateCheck() {
+const autoUpdateOn = () => !!loadUpdateState().auto;
+/* Automatische Suche: beim Start (startup=true) einmal, danach bei der
+   ersten Nutzung eines neuen Tages (App kommt wieder in den Vordergrund). */
+function dailyUpdateCheck(startup) {
+  if (!appVersion || !autoUpdateOn() || !navigator.onLine) return;   // Version noch nicht geladen oder ohne Server
   const st = loadUpdateState();
-  if (!navigator.onLine || Date.now() - (st.checkedAt || 0) < 20 * 3600 * 1000) return;
+  const sameDay = st.checkedAt && new Date(st.checkedAt).toDateString() === new Date().toDateString();
+  if (!startup && sameDay) return;
   checkForUpdate(true);
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) dailyUpdateCheck(false); });
+
+/* Hinweis-Banner (Startseite, Kursübersicht) — nur bei eingeschalteter
+   automatischer Suche und bis er für diese Version weggeklickt wurde */
+function updateBannerHtml() {
+  if (!updateInfo || !autoUpdateOn() || loadUpdateState().dismissed === updateInfo.version) return '';
+  return `<div class="notice upd-banner" id="updBanner">
+    <span class="upd-dot"></span>
+    <span class="upd-banner-t">Version ${esc(updateInfo.version)} von Pult. ist verfügbar.</span>
+    <button class="btn small primary" id="updBannerGo">Zum Update</button>
+    <button class="icon-btn upd-banner-x" id="updBannerX" title="Ausblenden" aria-label="Hinweis ausblenden">×</button>
+  </div>`;
+}
+function bindUpdateBanner() {
+  const go1 = document.getElementById('updBannerGo');
+  if (go1) go1.onclick = () => go({ name: 'settings', setPage: 'ueber' });
+  const x = document.getElementById('updBannerX');
+  if (x) x.onclick = () => {
+    saveUpdateState(Object.assign(loadUpdateState(), { dismissed: updateInfo && updateInfo.version }));
+    const b = document.getElementById('updBanner'); if (b) b.remove();
+  };
 }
 
 /* Änderungen zwischen installierter und neuer Version */
@@ -121,6 +153,8 @@ function updateSectionHtml() {
       <div class="set-buttons" style="margin-top:10px">
         <button class="btn" id="updCheck">Nach Update suchen</button>
       </div>
+      <label class="check-row" style="margin-top:10px"><input type="checkbox" id="updAuto" ${st.auto ? 'checked' : ''}>
+        <span>Regelmäßig nach Updates suchen <small>— beim Start und einmal am Tag; ein neuer Stand erscheint als Hinweis auf der Startseite</small></span></label>
       <div class="hint">Pult. läuft komplett offline und ändert sich nur, wenn du hier ein Update übernimmst. Vorher wird automatisch ein interner Sicherungsstand angelegt.</div>
     </div>
     ${v && v.changelog ? `<details class="upd-log"><summary>Was ist neu in dieser Version?</summary>${changelogHtml(v.changelog.filter(e => e.version === v.version))}</details>
@@ -138,6 +172,11 @@ function bindUpdateSection() {
   const box = document.getElementById('updBox');
   const bindApply = () => { const b = document.getElementById('updApply'); if (b) b.onclick = applyUpdate; };
   bindApply();
+  document.getElementById('updAuto').onchange = e => {
+    saveUpdateState(Object.assign(loadUpdateState(), { auto: e.target.checked }));
+    toast(e.target.checked ? 'Pult. sucht jetzt regelmäßig nach Updates.' : 'Automatische Suche aus.');
+    if (e.target.checked) dailyUpdateCheck(true);
+  };
   document.getElementById('updCheck').onclick = async e => {
     const btn = e.currentTarget;
     btn.disabled = true; btn.textContent = 'Suche …';
