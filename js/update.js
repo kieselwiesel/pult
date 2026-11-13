@@ -154,7 +154,7 @@ function updateSectionHtml() {
         <button class="btn" id="updCheck">Nach Update suchen</button>
       </div>
       <label class="check-row" style="margin-top:10px"><input type="checkbox" id="updAuto" ${st.auto ? 'checked' : ''}>
-        <span>Regelmäßig nach Updates suchen <small>— beim Start und einmal am Tag; ein neuer Stand erscheint als Hinweis auf der Startseite</small></span></label>
+        <span>Regelmäßig nach Updates suchen</span></label>
       <div class="hint">Pult. läuft komplett offline und ändert sich nur, wenn du hier ein Update übernimmst. Vorher wird automatisch ein interner Sicherungsstand angelegt.</div>
     </div>
     ${v && v.changelog ? `<details class="upd-log"><summary>Was ist neu in dieser Version?</summary>${changelogHtml(v.changelog.filter(e => e.version === v.version))}</details>
