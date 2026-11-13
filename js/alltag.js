@@ -99,16 +99,19 @@ document.addEventListener('keydown', e => {
 
 /* ---------- Stundenplan als Kalenderdatei ----------
    Jede Stunde wird ein wöchentlich (A/B: zweiwöchentlich) wiederholter Termin
-   bis zu den nächsten Ferien bzw. ein halbes Jahr. Importiert in den Kalender
-   zeigt dann das Kalender-Widget die nächste Stunde. */
+   für ein halbes Jahr; Ferien und freie Tage fallen heraus (EXDATE). Ohne
+   eingetragene freie Tage endet die Wiederholung wie früher ein halbes Jahr
+   später. Pausiert A/B in den Ferien, passt keine feste Wiederholung — dann
+   wird jede Stunde ein eigener Termin. Importiert in den Kalender zeigt das
+   Kalender-Widget die nächste Stunde. */
 function exportTimetableICS() {
   const lessons = (data.timetable.lessons || []).filter(l => l.placeholder || getCourse(l.courseId));
   if (!lessons.length) return toast('Der Stundenplan ist noch leer.');
   const periods = data.timetable.periods || [];
   const monday = mondayOf();
   const ab = abActive(), curWeek = ab ? abWeekOf() : 0;
-  const end = data.meta.ferienDatum && data.meta.ferienDatum > todayISO()
-    ? data.meta.ferienDatum : dateToISO(new Date(Date.now() + 182 * 86400000));
+  const end = dateToISO(new Date(Date.now() + 182 * 86400000));
+  const single = ab && data.timetable.abSkipFree && freeDays().length;   // jede Stunde einzeln
   const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Pult//Stundenplan//DE', 'CALSCALE:GREGORIAN', 'X-WR-CALNAME:Stundenplan (Pult.)'];
   lessons.forEach(l => {
     const p = periods[l.period]; if (!p) return;
@@ -117,10 +120,29 @@ function exportTimetableICS() {
     const m = new Date(monday);
     if (ab && (l.week || 0) && l.week !== curWeek) m.setDate(m.getDate() + 7);
     const date = isoForWeekday(m, l.day);
-    lines.push('BEGIN:VEVENT', `UID:${l.id}@pult-stundenplan`, 'DTSTAMP:' + icsStamp(todayISO(), '00:00'),
-      'SUMMARY:' + icsEscape(c ? `${c.subject} ${c.className}` : (l.label || 'Freitext')),
+    const summary = 'SUMMARY:' + icsEscape(c ? `${c.subject} ${c.className}` : (l.label || 'Freitext'));
+    const step = ab && (l.week || 0) ? 14 : 7;
+    if (single) {
+      /* Woche für Woche: nur an Schultagen und in der passenden A/B-Woche */
+      const d = new Date(isoForWeekday(monday, l.day) + 'T00:00:00');
+      for (; dateToISO(d) <= end; d.setDate(d.getDate() + 7)) {
+        const iso = dateToISO(d);
+        if (freeDayOf(iso) || ((l.week || 0) && abWeekOf(iso) !== l.week)) continue;
+        lines.push('BEGIN:VEVENT', `UID:${l.id}-${iso}@pult-stundenplan`, 'DTSTAMP:' + icsStamp(todayISO(), '00:00'), summary,
+          'DTSTART:' + icsStamp(iso, p.start), 'DTEND:' + icsStamp(iso, p.end));
+        if (l.room) lines.push('LOCATION:' + icsEscape(l.room));
+        lines.push('END:VEVENT');
+      }
+      return;
+    }
+    lines.push('BEGIN:VEVENT', `UID:${l.id}@pult-stundenplan`, 'DTSTAMP:' + icsStamp(todayISO(), '00:00'), summary,
       'DTSTART:' + icsStamp(date, p.start), 'DTEND:' + icsStamp(date, p.end),
-      `RRULE:FREQ=WEEKLY;INTERVAL=${ab && (l.week || 0) ? 2 : 1};UNTIL=${end.replace(/-/g, '')}T235959`);
+      `RRULE:FREQ=WEEKLY;INTERVAL=${step / 7};UNTIL=${end.replace(/-/g, '')}T235959`);
+    /* Ferien und freie Tage auslassen */
+    for (const d = new Date(date + 'T00:00:00'); dateToISO(d) <= end; d.setDate(d.getDate() + step)) {
+      const iso = dateToISO(d);
+      if (freeDayOf(iso)) lines.push('EXDATE:' + icsStamp(iso, p.start));
+    }
     if (l.room) lines.push('LOCATION:' + icsEscape(l.room));
     lines.push('END:VEVENT');
   });
@@ -192,7 +214,8 @@ function openYearChange() {
 function startNewYear(take, cls, o) {
   const old = data;
   const d = DEFAULT_DATA();
-  d.meta = Object.assign({}, old.meta, { ferienDatum: '', zeugnisDatum: '', halfYear: 'auto' });
+  d.meta = Object.assign({}, old.meta, { ferienDatum: '', zeugnisDatum: '', halfYear: 'auto',
+    freeDays: (old.meta.freeDays || []).filter(f => (f.to || f.from) >= todayISO()) });   // nur kommende freie Tage
   d.rubrics = old.rubrics;
   d.courses = old.courses.filter(c => take.includes(c.id)).map(c => {
     const n = newCourse(c.subject, cls[c.id] || c.className);

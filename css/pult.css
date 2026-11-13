@@ -196,13 +196,6 @@ main {
 .course-card .cc-class { color: var(--ink-soft); font-size: 14px; margin-top: 2px; }
 .course-card .cc-tag { display:inline-block; margin-top:10px; font-size:12px; font-weight:600; color: var(--accent); background: var(--accent-soft); padding: 2px 8px; border-radius: var(--radius); }
 .course-card .cc-foot { padding: 10px 16px; display: flex; justify-content: space-between; font-size: 13px; color: var(--ink-soft); background: var(--card-2); }
-.add-card {
-  border: 1px dashed var(--line); background: transparent; box-shadow: none;
-  align-items: center; justify-content: center; min-height: 130px;
-  color: var(--accent); font-weight: 650; gap: 6px; flex-direction: row;
-}
-.add-card:hover { background: var(--accent-soft); box-shadow: none; }
-.add-card .plus { font-size: 22px; }
 
 /* ---------- Tabs ---------- */
 .tabs { display: flex; gap: 0; border-bottom: 2px solid var(--line); margin-bottom: 16px; flex-wrap: wrap; }
@@ -1222,6 +1215,24 @@ button.pl-unit-title { appearance: none; border: none; background: none; font: i
 .tt-plan:hover { background: rgba(255,255,255,.95); }
 .tt-plan.done { opacity: .55; }
 html.is-dark .tt-plan { color: var(--ink); background: rgba(0,0,0,.25); }
+/* Stundenplan: Ferien und freie Tage */
+.tt-day.tt-free .tt-free-l { display: block; font-size: 11px; font-weight: 600; color: var(--amber); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.tt-cell.tt-off { background: repeating-linear-gradient(135deg, transparent 0 6px, var(--line-soft) 6px 7px); }
+.tt-cell.tt-off .tt-lesson { opacity: .45; }
+.pl-off { color: var(--amber); font-weight: 600; }
+/* Einstellungen: Ferienliste und Import */
+.chip.fd-past { opacity: .55; }
+.fd-imp-list { max-height: 50vh; overflow: auto; border: 1px solid var(--line-soft); border-radius: var(--radius); padding: 4px 10px; }
+.check-row.fd-imp span { display: flex; flex-direction: column; }
+.check-row.fd-imp small { color: var(--ink-faint); font-size: 12.5px; }
+.check-row.fd-imp.fd-past { opacity: .6; }
+/* Ecke „Stunde planen": unsichtbar, nach dem ersten Tipp sichtbar (armed) */
+.tt-plan-add { position: absolute; right: 0; bottom: 0; width: 38px; height: 32px; cursor: pointer; }
+.tt-plan-ico { position: absolute; right: 5px; bottom: 5px; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 4px; color: var(--c-fg, var(--ink)); background: rgba(255,255,255,.95); opacity: 0; transition: opacity .15s; }
+.tt-plan-add.armed .tt-plan-ico { opacity: 1; box-shadow: 0 0 0 1.5px var(--c-bar, var(--accent)); }
+@media (hover: hover) { .tt-plan-add:hover .tt-plan-ico { opacity: .45; } .tt-plan-add.armed:hover .tt-plan-ico { opacity: 1; } }
+html.is-dark .tt-plan-ico { color: var(--ink); background: rgba(0,0,0,.35); }
 
 /* ============================================================
    Kurse (Übersicht) und Kurs-Dashboard
@@ -1229,10 +1240,12 @@ html.is-dark .tt-plan { color: var(--ink); background: rgba(0,0,0,.25); }
 .course-card.kc .cc-top { border-top: 4px solid var(--c-bar, var(--accent)); }
 .kc-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
 .kc-head .cc-tag { margin-top: 2px; flex: none; }
-.kc-next { margin-top: 12px; display: flex; flex-direction: column; gap: 1px; font-size: 13px; }
-.kc-next span { color: var(--ink-faint); font-size: 12px; }
-.kc-next b { font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.kc-next b.kc-open { color: var(--ink-faint); font-weight: 500; font-style: italic; }
+/* Farbauswahl im Kursformular */
+.color-pick { display: flex; gap: 8px; flex-wrap: wrap; }
+.cp-sw { appearance: none; width: 34px; height: 34px; border-radius: 50%; cursor: pointer; padding: 0;
+  background: var(--c-bg); border: 3px solid var(--c-bar); box-shadow: 0 0 0 2px transparent; }
+.cp-sw.on { box-shadow: 0 0 0 2px var(--card), 0 0 0 4px var(--ink); }
+html.is-dark .cp-sw { background: color-mix(in srgb, var(--c-bar) 24%, var(--card)); }
 /* Mosaik: feine Zeilen, die Karten belegen je nach Höhe mehrere (siehe mosaic() in kurs.js) */
 .kd-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); grid-auto-rows: 4px; column-gap: 14px; row-gap: 0; grid-auto-flow: dense; }
 .kd-card { margin-bottom: 0; align-self: start; background: var(--card); box-shadow: var(--shadow); border-color: var(--line); }

@@ -115,7 +115,7 @@ async function clearDemoData() {
   await takeSnapshot('Vor dem Löschen der Beispieldaten').catch(() => {});
   const fresh = DEFAULT_DATA();
   const keep = Object.assign({}, data.meta);
-  ['demo', 'ferienDatum', 'ferienLabel', 'zeugnisDatum', 'lastBackup'].forEach(k => delete keep[k]);
+  ['demo', 'ferienDatum', 'ferienLabel', 'freeDays', 'zeugnisDatum', 'lastBackup'].forEach(k => delete keep[k]);
   Object.assign(fresh.meta, keep);
   fresh.rubrics = data.rubrics || [];
   data = fresh; runMigrations(); save();

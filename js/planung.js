@@ -166,10 +166,17 @@ function courseSlots(courseId, fromISO, maxSlots, maxDays) {
   const periods = data.timetable.periods || [];
   if (!(data.timetable.lessons || []).some(l => l.courseId === courseId)) return out;
   const d = new Date((fromISO || todayISO()) + 'T00:00:00');
+  const weekOf = new Map();   // A/B je Montag nur einmal berechnen
   for (let i = 0; i < (maxDays || 200) && out.length < maxSlots; i++, d.setDate(d.getDate() + 1)) {
     const wd = d.getDay(); if (wd < 1 || wd > 5) continue;
     const iso = dateToISO(d);
-    const week = abActive() ? abWeekOf(iso) : 0;
+    if (freeDayOf(iso)) continue;                 // Ferien / freier Tag: kein Unterricht
+    let week = 0;
+    if (abActive()) {
+      const mk = dateToISO(mondayOf(iso));
+      if (!weekOf.has(mk)) weekOf.set(mk, abWeekOf(iso));
+      week = weekOf.get(mk);
+    }
     let cur = null;
     for (let pi = 0; pi < periods.length; pi++) {
       const l = lessonAt(wd, pi, week);
@@ -206,6 +213,12 @@ function planSlot(p) {
 }
 function planLabel(p, long) { return p && p.date ? slotLabel(planSlot(p), long) : 'Entwurf'; }
 
+/* Stunde liegt auf einem freien Tag (z. B. später eingetragene Ferien) */
+function planOffHtml(p, long) {
+  const f = p && p.date && !p.done ? freeDayOf(p.date) : null;
+  return f ? ` <span class="pl-off" title="An diesem Tag ist frei — die Stunde neu zuordnen">· fällt aus${long ? ` (${esc(f.label || 'frei')})` : ''}</span>` : '';
+}
+
 /* ---------- Zugriff ---------- */
 const coursePlans = courseId => (data.lessonPlans || []).filter(p => p.courseId === courseId);
 const courseUnits = courseId => (data.units || []).filter(u => u.courseId === courseId);
@@ -236,9 +249,20 @@ function newPlan(courseId, fields) {
 /* ---------- Nach hinten verschieben ---------- */
 /* Die Stunde rückt in den nächsten Termin; was dort liegt, rückt mit — bis
    zur ersten freien Stunde. false, wenn es im Stundenplan keine freie gibt. */
-function shiftPlanBack(plan) {
+/* Termine ab der Stunde; liegt sie auf einem freien Tag, steht davor ein
+   gedachter Termin für sie — so rückt sie in die nächste echte Stunde. */
+function slotsFromPlan(plan) {
   const slots = courseSlots(plan.courseId, plan.date, 400, 400);
-  const idx = slots.findIndex(s => s.date === plan.date && s.periods.includes(plan.period));
+  let idx = slots.findIndex(s => s.date === plan.date && s.periods.includes(plan.period));
+  let virtual = false;
+  if (idx < 0 && freeDayOf(plan.date)) {
+    slots.unshift({ date: plan.date, period: plan.period, periods: [plan.period], courseId: plan.courseId });
+    idx = 0; virtual = true;
+  }
+  return { slots, idx, virtual };
+}
+function shiftPlanBack(plan) {
+  const { slots, idx } = slotsFromPlan(plan);
   if (idx < 0) return false;                    // die Stunde gibt es im Stundenplan nicht (mehr)
   const chain = [[plan]];
   let gap = false;
@@ -263,7 +287,14 @@ function neighborSlots(plan, dir) {
   if (dir < 0) { const d = new Date(plan.date + 'T00:00:00'); d.setDate(d.getDate() - 180); from = dateToISO(d); days = 181; }
   const slots = courseSlots(plan.courseId, from, 2000, days);
   const idx = slots.findIndex(s => s.date === plan.date && s.periods.includes(plan.period));
-  if (idx < 0) return null;
+  if (idx < 0) {
+    /* auf einem freien Tag: ↓ führt in die nächste echte Stunde */
+    if (dir > 0 && freeDayOf(plan.date)) {
+      const f = slotsFromPlan(plan);
+      return { cur: f.slots[0], target: f.slots[1] || null, virtual: true };
+    }
+    return null;
+  }
   return { cur: slots[idx], target: slots[idx + (dir < 0 ? -1 : 1)] || null };
 }
 /* Termin ist schon vorbei (heute: seine letzte Stunde ist zu Ende) */
@@ -277,10 +308,12 @@ function slotPast(s) {
 }
 function doSwapPlan(plan, dir, after) {
   const n = neighborSlots(plan, dir);
-  if (!n) return toast('Verschieben nicht möglich — die Stunde steht nicht (mehr) im Stundenplan.');
+  if (!n) return toast(freeDayOf(plan.date) ? 'An diesem Tag ist frei — mit ↓ oder ⇊ in die nächste Stunde schieben.' : 'Verschieben nicht möglich — die Stunde steht nicht (mehr) im Stundenplan.');
   if (!n.target) return toast(dir < 0 ? 'Davor gibt es keine Stunde mehr.' : 'Danach gibt es keine Stunde mehr im Stundenplan.');
   if (dir < 0 && slotPast(n.target) && !slotPast(n.cur)) return toast('Die vorherige Stunde ist schon vorbei.');
   const others = plansAtSlot(n.target).filter(q => q.id !== plan.id);
+  /* nicht in einen freien Tag hineintauschen */
+  if (n.virtual && others.length) return toast(`Die nächste Stunde ist schon geplant — mit ⇊ einschieben.`);
   others.forEach(q => { q.date = n.cur.date; q.period = n.cur.period; });
   plan.date = n.target.date; plan.period = n.target.period;
   save();
@@ -304,8 +337,7 @@ function bindPlanMove(root, after) {
 function doShiftBack(plan, after) {
   if (!plan.date) return;
   const n = (() => {   // wie viele rücken mit? (für die Meldung)
-    const slots = courseSlots(plan.courseId, plan.date, 400, 400);
-    const idx = slots.findIndex(s => s.date === plan.date && s.periods.includes(plan.period));
+    const { slots, idx } = slotsFromPlan(plan);
     let k = 0; for (let i = idx + 1; i < slots.length && plansAtSlot(slots[i]).length; i++) k++;
     return k;
   })();
@@ -438,7 +470,7 @@ function renderPlanung() {
   const planRow = (p, extra) => `<div class="pl-row ${p.done ? 'done' : ''} ${extra ? 'pl-extra' : ''}">
       <button class="todo-check ${p.done ? 'on' : ''}" data-done="${p.id}" aria-label="${p.done ? 'nicht erledigt' : 'erledigt'}"></button>
       <button class="pl-row-main" data-open="${p.id}"><span class="pl-row-topic">${esc(planTitle(p))}</span>
-        <span class="pl-row-when ${p.date ? '' : 'draft'}">${esc(planLabel(p))}</span></button>
+        <span class="pl-row-when ${p.date ? '' : 'draft'}">${esc(planLabel(p))}${planOffHtml(p)}</span></button>
     </div>`;
   /* Stundenliste: in der aktuellen Einheit die offenen Stunden, alles andere
      hinter „Mehr anzeigen" */
@@ -591,7 +623,7 @@ function renderPlan() {
   app().innerHTML = `
     <div class="page-head">
       <div><h1 id="plH">${esc(planTitle(p))}</h1>
-        <div class="sub">${esc(c.subject)} ${esc(c.className)} · ${esc(planLabel(p, true))}</div></div>
+        <div class="sub">${esc(c.subject)} ${esc(c.className)} · ${esc(planLabel(p, true))}${planOffHtml(p, true)}</div></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         ${p.date ? planMoveHtml(p, (() => { const n = neighborSlots(p, -1); return !n || !n.target || (slotPast(n.target) && !slotPast(n.cur)); })()) : ''}
         <button class="btn small" id="plPrint">Drucken</button>
@@ -639,6 +671,8 @@ function renderPlan() {
     }},
   ]);
 }
+/* Symbol „Stunde planen" (Dokument mit +) im Stundenplan */
+const PLAN_ADD_SVG = `<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"><path d="M9 14.4H3.6V1.6h5.6l3.2 3.2V8"/><path d="M9 1.6v3.4h3.4"/><path d="M5.6 7.4h3.6"/><path d="M12.4 10v4.8M10 12.4h4.8"/></svg>`;
 /* Symbol „Planung vorhanden" im Stundenplan */
 const PLAN_DOC_SVG = `<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"><path d="M3.6 1.6h5.6l3.2 3.2v9.6H3.6z"/><path d="M9 1.6v3.4h3.4"/><path d="M5.6 8h4.8M5.6 10.6h4.8"/></svg>`;
 

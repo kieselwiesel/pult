@@ -13,8 +13,9 @@ const STORE_KEY = 'pult.data.v3';
 
 const DEFAULT_DATA = () => ({
   meta: {
-    ferienDatum: '',
+    ferienDatum: '',     // veraltet — ersetzt durch freeDays (Migration 4)
     ferienLabel: 'Ferien',
+    freeDays: [],        // Ferien und freie Tage { id, label, from, to } — to einschließlich
     zeugnisDatum: '',
     lastBackup: '',      // ISO-Datum des letzten JSON-Backups
     tableLayout: 'invers',    // 'invers' (Standard: Gesamt und Neuestes zuerst) | 'standard' (von links nach rechts)
@@ -34,6 +35,7 @@ const DEFAULT_DATA = () => ({
     lessons: [],       // { id, day:1..5, period:0-basiert, courseId, room, week:0|1|2 }
     abWeeks: false,    // Zwei-Wochen-Rhythmus (Woche A / Woche B)
     anchorMonday: '',  // ISO-Montag einer Woche A — Bezugspunkt für den Wechsel
+    abSkipFree: false, // A/B pausiert in Wochen, die ganz frei sind (Ferien)
   },
   todos: [],           // { id, text, done, created, due, courseId|null }
   termine: [],         // { id, title, date, start, end, allDay, location, note, courseId|null, uid }
@@ -90,12 +92,21 @@ const uid = () => Math.random().toString(36).slice(2, 9);
    data.meta.schema zählt, welche Umbauten der Daten schon gelaufen sind.
    Jede Migration läuft genau einmal — beim Start und nach dem Einlesen
    eines (älteren) Backups. Neue Umbauten hinten anhängen, SCHEMA erhöhen. */
-const SCHEMA = 3;
+const SCHEMA = 4;
 const MIGRATIONS = [
   { to: 1, run: () => migrateHaLog() },    // Hausaufgaben: 3-Zustands-Modell
   { to: 2, run: () => migrateRaster() },   // Bewertungsraster + Beispiel-Vorlagen
   { to: 3, run: () => (data.courses || []).forEach(sortStudents) },   // Schülerlisten alphabetisch
+  { to: 4, run: () => migrateFerien() },   // „Nächster Ferienbeginn" → Liste der freien Tage
 ];
+/* Das frühere Einzeldatum wird ein Eintrag der Liste (Ende = Beginn, lässt sich ergänzen) */
+function migrateFerien() {
+  const m = data.meta;
+  if (!Array.isArray(m.freeDays)) m.freeDays = [];
+  if (m.ferienDatum && !m.freeDays.length)
+    m.freeDays.push({ id: uid(), label: m.ferienLabel || 'Ferien', from: m.ferienDatum, to: m.ferienDatum });
+  m.ferienDatum = '';
+}
 function runMigrations() {
   normalizeData(data);
   const from = Number(data.meta.schema) || 0;
@@ -116,6 +127,7 @@ function normalizeData(d) {
   d.timetable = Object.assign(def.timetable, d.timetable);
   if (!Array.isArray(d.timetable.periods)) d.timetable.periods = DEFAULT_PERIODS();
   if (!Array.isArray(d.timetable.lessons)) d.timetable.lessons = [];
+  if (!Array.isArray(d.meta.freeDays)) d.meta.freeDays = [];
   if (!Array.isArray(d.courses)) d.courses = [];
   d.courses.forEach(c => {
     const nc = newCourse(c.subject, c.className);
@@ -353,9 +365,15 @@ function buildCourse(d, cfg) {
 function seed() {
   const d = DEFAULT_DATA();
   d.meta.demo = true;   // fiktive Daten — Hinweis und „Beispieldaten löschen" (willkommen.js)
-  d.meta.ferienDatum = '2026-07-30';
-  d.meta.ferienLabel = 'Sommerferien';
   d.meta.zeugnisDatum = '2026-07-13';
+  {   /* Beispiel-Ferien im laufenden Schuljahr */
+    const now = new Date(), y = now.getMonth() >= 7 ? now.getFullYear() : now.getFullYear() - 1;
+    d.meta.freeDays = [
+      { id: uid(), label: 'Weihnachtsferien', from: `${y}-12-21`, to: `${y + 1}-01-02` },
+      { id: uid(), label: 'Osterferien', from: `${y + 1}-03-30`, to: `${y + 1}-04-10` },
+      { id: uid(), label: 'Sommerferien', from: `${y + 1}-07-02`, to: `${y + 1}-08-12` },
+    ];
+  }
 
   const cMathe = buildCourse(d, {
     subject: 'Mathematik', className: '9b', weightWritten: 40, seed: 1907,
@@ -1058,7 +1076,7 @@ function dateToISO(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padS
 /* ISO-Datum + Wochentag 1..5 → Datum dieses Tages in der Woche von baseMonday */
 function isoForWeekday(baseMonday, wd) { const d = new Date(baseMonday); d.setDate(d.getDate() + (wd - 1)); return dateToISO(d); }
 
-/* stabile, dezente Farbe je Kurs (Index-basiert) fürs Stundenplan-Raster */
+/* dezente Farbe je Kurs: selbst gewählt (course.color = Index) oder nach Position */
 const COURSE_COLORS = [
   { bg: '#e7eef7', fg: '#2b4d73', bar: '#6d94c4' },
   { bg: '#f3eef8', fg: '#4a3d73', bar: '#8f7cc4' },
@@ -1069,9 +1087,18 @@ const COURSE_COLORS = [
   { bg: '#eaf5ec', fg: '#2f6a3a', bar: '#5aa86a' },
   { bg: '#f3f1e6', fg: '#5c5720', bar: '#a89f5a' },
 ];
-function courseColor(courseId) {
+function courseColorIndex(courseId) {
   const i = data.courses.findIndex(c => c.id === courseId);
-  return COURSE_COLORS[(i < 0 ? 0 : i) % COURSE_COLORS.length];
+  const c = data.courses[i];
+  if (c && Number.isInteger(c.color) && c.color >= 0) return c.color % COURSE_COLORS.length;
+  return (i < 0 ? 0 : i) % COURSE_COLORS.length;
+}
+function courseColor(courseId) { return COURSE_COLORS[courseColorIndex(courseId)]; }
+/* Vorschlag für einen neuen Kurs: die erste Farbe, die noch kein Kurs hat */
+function freeCourseColor() {
+  const used = new Set(data.courses.map(c => courseColorIndex(c.id)));
+  const i = COURSE_COLORS.findIndex((_, k) => !used.has(k));
+  return i >= 0 ? i : data.courses.length % COURSE_COLORS.length;
 }
 /* ---------- Zwei-Wochen-Rhythmus (Woche A / Woche B) ----------
    lesson.week: 0 = jede Woche, 1 = nur A, 2 = nur B. Ältere Stunden ohne Feld
@@ -1081,16 +1108,56 @@ const MS_WEEK = 7 * 24 * 60 * 60 * 1000;
 function abActive() { return !!(data.timetable && data.timetable.abWeeks); }
 /* Montag, der als Woche A zählt — ohne Anker ist es der Montag dieser Woche */
 function abAnchor() { return mondayOf(data.timetable.anchorMonday || undefined); }
-/* Woche (1 = A, 2 = B), in der das Datum liegt; Default heute */
+/* Woche (1 = A, 2 = B), in der das Datum liegt; Default heute.
+   Mit abSkipFree zählen Wochen, die ganz frei sind (Mo–Fr), nicht mit:
+   nach den Ferien geht es weiter, wo es aufgehört hat. */
 function abWeekOf(iso) {
-  const weeks = Math.round((mondayOf(iso) - abAnchor()) / MS_WEEK);   // DST-fest durch Runden
+  const target = mondayOf(iso), anchor = abAnchor();
+  let weeks = Math.round((target - anchor) / MS_WEEK);   // DST-fest durch Runden
+  if (data.timetable.abSkipFree && freeDays().length) {
+    const sign = weeks >= 0 ? 1 : -1;
+    const m = new Date(sign > 0 ? anchor : target);
+    for (let i = Math.abs(weeks); i > 0; i--) { if (weekFree(m)) weeks -= sign; m.setDate(m.getDate() + 7); }
+  }
   return ((weeks % 2) + 2) % 2 === 0 ? 1 : 2;
 }
 /* legt den Anker so, dass die laufende Woche die gewünschte ist */
 function abSetCurrentWeek(week) {
   const m = mondayOf();
-  if (week === 2) m.setDate(m.getDate() - 7);
+  if (week === 2) {
+    m.setDate(m.getDate() - 7);
+    for (let i = 0; i < 30 && data.timetable.abSkipFree && weekFree(m); i++) m.setDate(m.getDate() - 7);
+  }
   data.timetable.anchorMonday = dateToISO(m);
+}
+
+/* ---------- Ferien und freie Tage ----------
+   data.meta.freeDays: [{ id, label, from, to }] (to einschließlich). An
+   freien Tagen gibt es keine Termine für die Planung (courseSlots), der
+   Stundenplan graut sie aus. */
+const freeDays = () => (data && data.meta && Array.isArray(data.meta.freeDays) ? data.meta.freeDays : []);
+function freeDayOf(iso) {
+  return freeDays().find(f => f.from && iso >= f.from && iso <= (f.to || f.from)) || null;
+}
+/* Woche ab diesem Montag Mo–Fr komplett frei? */
+function weekFree(monday) {
+  const d = new Date(monday);
+  for (let i = 0; i < 5; i++, d.setDate(d.getDate() + 1)) if (!freeDayOf(dateToISO(d))) return false;
+  return true;
+}
+const freeLen = f => Math.round((new Date((f.to || f.from) + 'T00:00:00') - new Date(f.from + 'T00:00:00')) / 86400000) + 1;
+/* „Ferien" für den Countdown: mit „Ferien" im Namen oder ab drei Tagen */
+const isFerien = f => /ferien/i.test(f.label || '') || freeLen(f) >= 3;
+/* nächste (oder laufende) Ferien */
+function nextFerien() {
+  const t = todayISO();
+  return freeDays().filter(f => f.from && (f.to || f.from) >= t && isFerien(f))
+    .sort((a, b) => a.from.localeCompare(b.from))[0] || null;
+}
+/* Zeitraum lesbar: „12.10. – 23. Oktober 2026" bzw. ein Tag */
+function fmtFreeRange(f) {
+  const to = f.to || f.from;
+  return to === f.from ? fmtDateLong(f.from) : `${fmtDate(f.from)} – ${fmtDateLong(to)}`;
 }
 /* Stunde in einem Feld. Im A/B-Plan gewinnt der Eintrag der gezeigten Woche
    vor einem Eintrag „jede Woche". */
@@ -1160,7 +1227,7 @@ function parseICS(text) {
     else if (name === 'DESCRIPTION') cur.note = icsUnescape(value);
     else if (name === 'UID') cur.uid = value.trim();
     else if (name === 'DTSTART') { const p = parseICSDate(value, params); cur.date = p.date; cur.start = p.time; cur.allDay = p.allDay; }
-    else if (name === 'DTEND') { const p = parseICSDate(value, params); cur.end = p.time; }
+    else if (name === 'DTEND') { const p = parseICSDate(value, params); cur.end = p.time; cur.endDate = p.date; cur.endAllDay = p.allDay; }
   });
   return events;
 }
@@ -1334,24 +1401,19 @@ function renderCourses() {
     const m = courseMean(c);
     const col = gradeColor(m);
     const card = document.createElement('div');
-    card.className = 'course-card';
+    card.className = 'course-card kc';
+    card.style.setProperty('--c-bar', courseColor(c.id).bar);
     card.innerHTML = `
       <div class="cc-top">
-        <div class="cc-subject">${esc(c.subject)}</div>
-        <div class="cc-class">${esc(c.className)}</div>
-        <span class="cc-tag" style="background:${m==null?'var(--accent-soft)':col.bg};color:${m==null?'var(--accent-ink)':col.fg}">
-          Ø ${fmtGrade(m, c.scale, true)}${m==null||c.scale==='noten'?'':' · '+noteLabel(m)}</span>
+        <div class="kc-head"><div><div class="cc-subject">${esc(c.subject)}</div><div class="cc-class">${esc(c.className)}</div></div>
+          <span class="cc-tag" style="background:${m==null?'var(--accent-soft)':col.bg};color:${m==null?'var(--accent-ink)':col.fg}">
+            Ø ${fmtGrade(m, c.scale, true)}${m==null||c.scale==='noten'?'':' · '+noteLabel(m)}</span></div>
       </div>
-      <div class="cc-foot"><span>${c.students.length} Schüler:innen</span><span>Notenschnitt</span></div>
+      <div class="cc-foot"><span>${c.students.length} Schüler:innen</span></div>
     `;
     card.onclick = () => go({ name: 'course', courseId: c.id, hy: defaultHalfYear(c), view: 'simpel' });
     grid.appendChild(card);
   });
-  const add = document.createElement('div');
-  add.className = 'course-card add-card';
-  add.innerHTML = `<span class="plus">+</span> Neuer Kurs`;
-  add.onclick = () => openCourseForm();
-  grid.appendChild(add);
 }
 
 /* ============================================================
@@ -1380,7 +1442,7 @@ function renderHome() {
   const week = ab ? abWeekOf(dateToISO(monday)) : 0;
   const wdToday = planWeek ? 0 : todayWeekday();
   const periods = data.timetable.periods || [];
-  const ferien = weeksUntil(data.meta.ferienDatum);
+  const nf = nextFerien();
   const zeugnis = weeksUntil(data.meta.zeugnisDatum);
   const openTodos = (data.todos || []).filter(t => !t.done).length;
   const nextTermin = upcomingTermine(1)[0];
@@ -1397,7 +1459,8 @@ function renderHome() {
     const day = i + 1;
     const iso = isoForWeekday(monday, day);
     const isToday = day === wdToday;
-    return `<th class="tt-day ${isToday ? 'tt-today' : ''}"><span class="tt-wd">${wd}</span><span class="tt-date">${fmtDate(iso)}</span></th>`;
+    const free = freeDayOf(iso);
+    return `<th class="tt-day ${isToday ? 'tt-today' : ''} ${free ? 'tt-free' : ''}"><span class="tt-wd">${wd}</span><span class="tt-date">${fmtDate(iso)}</span>${free ? `<span class="tt-free-l" title="${esc(free.label || 'frei')}">${esc(free.label || 'frei')}</span>` : ''}</th>`;
   }).join('');
 
   /* laufende Stunde (nur in der aktuellen Woche) */
@@ -1406,12 +1469,13 @@ function renderHome() {
   const bodyRows = periods.map((p, pi) => {
     const cells = [1, 2, 3, 4, 5].map(day => {
       const isToday = day === wdToday;
-      const isNow = isToday && pi === nowPi;
+      const off = !!freeDays().length && !!freeDayOf(isoForWeekday(monday, day));   // Ferien / freier Tag
+      const isNow = isToday && pi === nowPi && !off;
       const l = lessonAt(day, pi, week);
       if (l && l.placeholder) {
         const label = esc(l.label || 'Freitext');
         const mark = ab && (l.week || 0) ? `<span class="tt-ab">${AB_LABEL[l.week]}</span>` : '';
-        return `<td class="tt-cell ${isToday ? 'tt-today' : ''} ${isNow ? 'tt-now' : ''}">
+        return `<td class="tt-cell ${isToday ? 'tt-today' : ''} ${isNow ? 'tt-now' : ''} ${off ? 'tt-off' : ''}">
           <button class="tt-lesson tt-placeholder" data-day="${day}" data-period="${pi}" ${planEdit ? '' : 'disabled'}>
             ${mark}<span class="tt-subject">${label}</span><span class="tt-meta">${esc(l.room || '')}</span></button></td>`;
       }
@@ -1425,11 +1489,21 @@ function renderHome() {
         /* Planung dieser Stunde (bei Doppelstunden an der ersten) */
         const pl = c && !planEdit ? planAt(c.id, isoForWeekday(monday, day), pi) : null;
         const doc = pl ? `<span class="tt-plan ${pl.done ? 'done' : ''}" data-plan="${pl.id}" role="button" tabindex="0" title="Planung: ${esc(planTitle(pl))}" aria-label="Planung öffnen: ${esc(planTitle(pl))}">${PLAN_DOC_SVG}</span>` : '';
-        return `<td class="tt-cell ${isToday ? 'tt-today' : ''} ${isNow ? 'tt-now' : ''}">
+        /* ohne Planung: unsichtbare Fläche unten rechts — erster Tipp zeigt
+           das Symbol mit +, der zweite legt eine Stunde für diesen Termin an.
+           Bei einer Doppelstunde zählt die erste; ist sie geplant, gibt es keine. */
+        let add = '';
+        if (c && !planEdit && !pl && !off) {
+          const iso = isoForWeekday(monday, day);
+          const slot = courseSlots(c.id, iso, 12, 1).find(s => s.periods.includes(pi));
+          if (!slot || !plansAtSlot(slot).length)
+            add = `<span class="tt-plan-add" data-plan-add="${iso}|${slot ? slot.period : pi}" data-course="${c.id}" role="button" tabindex="0" title="Stunde planen" aria-label="Diese Stunde planen"><span class="tt-plan-ico">${PLAN_ADD_SVG}</span></span>`;
+        }
+        return `<td class="tt-cell ${isToday ? 'tt-today' : ''} ${isNow ? 'tt-now' : ''} ${off ? 'tt-off' : ''}">
           <button class="tt-lesson ${pl ? 'has-plan' : ''}" data-day="${day}" data-period="${pi}" style="--c-bg:${col.bg};--c-fg:${col.fg};--c-bar:${col.bar}">
-            ${mark}<span class="tt-subject">${label}</span><span class="tt-meta">${sub}</span>${doc}</button></td>`;
+            ${mark}<span class="tt-subject">${label}</span><span class="tt-meta">${sub}</span>${doc}${add}</button></td>`;
       }
-      return `<td class="tt-cell ${isToday ? 'tt-today' : ''} ${planEdit ? 'tt-editable' : ''}">
+      return `<td class="tt-cell ${isToday ? 'tt-today' : ''} ${planEdit ? 'tt-editable' : ''} ${off ? 'tt-off' : ''}">
         ${planEdit ? `<button class="tt-add" data-day="${day}" data-period="${pi}">+</button>` : ''}</td>`;
     }).join('');
     return `<tr>
@@ -1456,7 +1530,10 @@ function renderHome() {
     ${updateBannerHtml()}
     <section class="dash">
       <div class="dash-card clickable" id="dashFerien">
-        <div class="label">${esc(data.meta.ferienLabel || 'Nächste Ferien')}</div>${weekTile(ferien, data.meta.ferienDatum)}
+        <div class="label">${esc(nf ? nf.label || 'Ferien' : 'Nächste Ferien')}</div>${
+          !nf ? `<div class="value">–</div><div class="foot">Ferien eintragen ›</div>`
+          : nf.from <= todayISO() ? `<div class="value">jetzt</div><div class="foot">bis ${fmtDateLong(nf.to || nf.from)}</div>`
+          : weekTile(weeksUntil(nf.from), nf.from)}
       </div>
       <div class="dash-card clickable" id="dashZeugnis">
         <div class="label">Zeugniskonferenz</div>${weekTile(zeugnis, data.meta.zeugnisDatum)}
@@ -1480,14 +1557,20 @@ function renderHome() {
           <button class="btn small ${planWeek ? 'primary' : ''}" id="btnWeekNow" title="Zur aktuellen Woche" aria-label="Zur aktuellen Woche" ${planWeek ? '' : 'disabled'}>○</button>
           <button class="btn small" id="btnWeekNext" title="Nächste Woche" aria-label="Nächste Woche">›</button>
         </span>
-        <button class="btn small" id="btnPeriods">Zeiten</button>
+        ${planEdit ? '<button class="btn small" id="btnPeriods">Zeiten ändern</button>' : ''}
         <button class="btn small ${planEdit ? 'primary' : ''}" id="btnPlanEdit">${planEdit ? 'Fertig' : 'Plan bearbeiten'}</button>
       </div>
     </div>
 
-    ${!data.courses.length ? `<div class="notice">Noch keine Kurse angelegt. Lege zuerst unter <b>Kurse</b> Kurse an, dann kannst du sie hier in den Stundenplan eintragen.</div>` : ''}
-    ${planEdit ? `<div class="notice">Tippe auf ein Feld, um einen Kurs einzutragen oder zu ändern.</div>`
-      : (hasLessons ? '' : `<div class="notice">Noch keine Stunden eingetragen. Tippe auf <b>Plan bearbeiten</b> und fülle das Raster.</div>`)}
+    ${(() => {   /* höchstens ein Hinweis über dem Raster */
+      const noCourses = !data.courses.length;
+      const txt = planEdit
+        ? (noCourses ? 'Noch keine Kurse angelegt — lege sie zuerst unter <b>Kurse</b> an.' : '')
+        : noCourses && !hasLessons ? 'Noch keine Kurse und keine Stunden. Lege zuerst unter <b>Kurse</b> deine Kurse an und trage sie dann über <b>Plan bearbeiten</b> hier in den Stundenplan ein.'
+        : noCourses ? 'Noch keine Kurse angelegt. Lege zuerst unter <b>Kurse</b> Kurse an, dann kannst du sie hier in den Stundenplan eintragen.'
+        : !hasLessons ? 'Noch keine Stunden eingetragen. Tippe auf <b>Plan bearbeiten</b> und fülle das Raster.' : '';
+      return txt ? `<div class="notice">${txt}</div>` : '';
+    })()}
 
     ${weekTabs}
 
@@ -1510,7 +1593,7 @@ function renderHome() {
   document.getElementById('dashZeugnis').onclick = () => go({ name: 'settings', setPage: 'schuljahr' });
   document.getElementById('dashTodos').onclick = () => go({ name: 'todos' });
   document.getElementById('dashTermin').onclick = () => go({ name: 'termine' });
-  document.getElementById('btnPeriods').onclick = openPeriodsEditor;
+  const bp = document.getElementById('btnPeriods'); if (bp) bp.onclick = openPeriodsEditor;
   document.getElementById('btnPlanEdit').onclick = () => { planEdit = !planEdit; renderHome(); };
   document.getElementById('btnWeekPrev').onclick = () => { planWeek--; renderHome(); };
   document.getElementById('btnWeekNext').onclick = () => { planWeek++; renderHome(); };
@@ -1536,7 +1619,29 @@ function renderHome() {
     el.addEventListener('click', open);
     el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') open(e); });
   });
+  /* Ecke unten rechts ohne Planung: erst Symbol zeigen, dann neue Stunde anlegen */
+  app().querySelectorAll('.tt-plan-add').forEach(el => {
+    const act = e => {
+      e.stopPropagation(); e.preventDefault();
+      if (!el.classList.contains('armed')) {
+        app().querySelectorAll('.tt-plan-add.armed').forEach(x => x.classList.remove('armed'));
+        el.classList.add('armed');
+        return;
+      }
+      const c = getCourse(el.dataset.course); if (!c) return;
+      const [date, per] = el.dataset.planAdd.split('|');
+      el.classList.remove('armed');
+      openNewPlan(c, { date, period: +per });
+    };
+    el.addEventListener('click', act);
+    el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') act(e); });
+  });
 }
+/* Tipp woanders hin: das eingeblendete „+“-Symbol wieder verstecken */
+document.addEventListener('click', e => {
+  if (e.target.closest && e.target.closest('.tt-plan-add')) return;
+  document.querySelectorAll('.tt-plan-add.armed').forEach(x => x.classList.remove('armed'));
+}, true);
 
 function openLessonEditor(day, period, week) {
   const ab = abActive();
@@ -3576,12 +3681,17 @@ function openCourseForm(course, draft) {
   const d = draft || {};
   const wl = d.wl || (editing ? courseCats(c).map(k => ({ id: k.id, weight: k.weight })) : defaultCatList());
   const h1v = d.h1 != null ? d.h1 : c.weightHY1;
-  const pending = () => ({ subject: val('fSubject'), className: val('fClass'), scale: val('fScale'), h1: clamp(parseInt(val('fH1')) || 0, 0, 100), wl });
+  let color = d.color != null ? d.color : editing ? courseColorIndex(c.id) : freeCourseColor();
+  const pending = () => ({ subject: val('fSubject'), className: val('fClass'), scale: val('fScale'), h1: clamp(parseInt(val('fH1')) || 0, 0, 100), wl, color });
   modal(editing ? 'Kurs bearbeiten' : 'Neuer Kurs', `
     <div class="row2">
       <div class="field"><label>Fach</label><input id="fSubject" type="text" value="${esc(d.subject != null ? d.subject : c.subject)}" placeholder="z. B. Mathematik"></div>
       <div class="field"><label>Klasse / Kurs</label><input id="fClass" type="text" value="${esc(d.className != null ? d.className : c.className)}" placeholder="z. B. 9b oder EF"></div>
     </div>
+    <div class="field" style="margin-top:12px"><label>Farbe</label>
+      <div class="color-pick" id="fColor" role="radiogroup" aria-label="Farbe des Kurses">${COURSE_COLORS.map((k, i) =>
+        `<button type="button" class="cp-sw ${i === color ? 'on' : ''}" data-col="${i}" role="radio" aria-checked="${i === color}" aria-label="Farbe ${i + 1}" style="--c-bg:${k.bg};--c-bar:${k.bar}"></button>`).join('')}</div>
+      <div class="hint">Im Stundenplan, in der Planung und auf den Kurskacheln.</div></div>
     ${editing ? `<div class="field"><label>Schüler:innen</label>
       <div class="set-buttons"><button type="button" class="btn" id="fStudents">Schüler:innen bearbeiten (${c.students.length})</button></div></div>` : ''}
     <div class="field">
@@ -3619,6 +3729,7 @@ function openCourseForm(course, draft) {
       const target = editing ? c : newCourse(subject, className);
       target.subject = subject; target.className = className; target.scale = scale;
       target.weightHY1 = h1; target.weightHY2 = 100 - h1;
+      target.color = color;
       setCourseCats(target, wl);
       if (!editing) data.courses.push(target);
       save(); closeModal(); render();
@@ -3645,6 +3756,10 @@ function openCourseForm(course, draft) {
     }
     wl.push({ id: v, weight: 0 }); rows.redraw(); fillAdd();
   };
+  document.querySelectorAll('#fColor [data-col]').forEach(b => b.onclick = () => {
+    color = +b.dataset.col;
+    document.querySelectorAll('#fColor [data-col]').forEach(x => { const on = x === b; x.classList.toggle('on', on); x.setAttribute('aria-checked', on); });
+  });
   const fh1 = document.getElementById('fH1'), fh2 = document.getElementById('fH2');
   fh1.oninput = () => { fh2.value = clamp(100 - (parseInt(fh1.value) || 0), 0, 100); };
   /* zur Schülerliste und mit „Fertig" zurück — Eingaben im Formular bleiben erhalten */

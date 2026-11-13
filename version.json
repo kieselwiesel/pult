@@ -8,19 +8,18 @@
       "changes": [
         "Neue Navigation: Kurse, Noten, Planung, Todos, Termine",
         "Unter Planung kann nun auch Unterrichtsplanung hinterlegt werden",
-        "Auf dem neuen Kurs-Dashboard hat man sämtliche Informationen zu einem Kurs zur Hand."
+        "Auf dem neuen Kurs-Dashboard hat man sämtliche Informationen zu einem Kurs zur Hand.",
+        "Ferien und freie Tage lassen sich unter Einstellungen → Schuljahr eintragen oder aus einer Kalenderdatei (.ics) importieren — Planung und Stundenplan berücksichtigen sie.",
+        "Im Stundenplan lässt sich eine noch nicht geplante Stunde direkt über die Ecke unten rechts planen."
      ]
     },
     {
       "version": "1.0.12",
       "date": "2026-11-13",
       "changes": [
-        "Eigene Notenkategorien neben Schriftlich und Mündlich (z. B. Praxis, Portfolio): anlegen unter Einstellungen → Notenkategorien, im Kurs aufnehmen und gewichten unter Kurs bearbeiten",
-        "+ Leistung → Kategorie-Note; auch Klassenarbeit/Test, Bewertungsraster, Sonstige Leistungen und Zwischenstände können in eigenen Kategorien zählen",
-        "Notentabelle und Notenverlauf: eigene Kategorien als weitere Ansicht; Rechenweg, individuelle Gewichtung und Ausdrucke zeigen alle Kategorien",
-        "Einstellungen → Über Pult.: auf Wunsch regelmäßig nach Updates suchen — beim Start und einmal am Tag; ein neuer Stand erscheint als Hinweis auf der Startseite (standardmäßig aus)",
-        "Schülerlisten ordnen sich automatisch alphabetisch — nach Nachnamen, wenn alle einen haben, sonst nach Vornamen (auch in bestehenden Kursen)"
-        
+        "Eigene Notenkategorien neben Schriftlich und Mündlich (z. B. Praxis, Portfolio) — anlegen unter Einstellungen → Notenkategorien, gewichten unter Kurs bearbeiten.",
+        "Auf Wunsch sucht Pult. regelmäßig nach Updates (Einstellungen → Über Pult.).",
+        "Schülerlisten sind automatisch alphabetisch sortiert."
       ]
     },
     {

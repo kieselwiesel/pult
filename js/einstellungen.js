@@ -66,15 +66,37 @@ const setSaved = () => { save(); toast('Gespeichert.'); };
 /* ---------- Schuljahr ---------- */
 function setSchuljahr(body) {
   const m = data.meta;
+  const today = todayISO();
+  const list = freeDays().slice().sort((a, b) => (a.from || '').localeCompare(b.from || ''));
+  const past = list.filter(f => (f.to || f.from) < today);
+  const nf = nextFerien();
+  const rows = list.map(f => {
+    const over = (f.to || f.from) < today, now = !over && f.from <= today;
+    const n = freeLen(f);
+    /* „Ferien" mit nur einem Tag — meist aus dem früheren Feld „Nächster Ferienbeginn" */
+    const noEnd = !over && n === 1 && /ferien/i.test(f.label || '') ? '<span class="pl-off">Ende eintragen?</span>' : '';
+    const sub = [fmtFreeRange(f), n > 1 ? `${n} Tage` : '', over ? 'vorbei' : now ? 'läuft' : '', nf && nf.id === f.id ? 'Countdown' : '', noEnd].filter(Boolean).join(' · ');
+    return `<div class="chip ${over ? 'fd-past' : ''}">
+      <div class="chip-main"><b>${esc(f.label || 'Frei')}</b><span>${sub}</span></div>
+      <div style="display:flex;gap:8px">
+        <button class="btn small" data-fdedit="${f.id}">Ändern</button>
+        <button class="btn small danger" data-fddel="${f.id}" aria-label="Löschen">×</button>
+      </div></div>`;
+  }).join('');
   body.innerHTML = `
     <section class="set-card">
-      <div class="field"><label>Nächster Ferienbeginn</label>
-        <div class="row2">
-          <input id="mFerienDate" type="date" value="${m.ferienDatum || ''}">
-          <input id="mFerienLabel" type="text" value="${esc(m.ferienLabel || '')}" placeholder="z. B. Sommerferien">
-        </div>
-        <div class="hint">Erscheint als Countdown auf der Startseite.</div>
+      <h2>Ferien und freie Tage</h2>
+      <div class="chip-list">${rows || '<div class="notice">Noch nichts eingetragen.</div>'}</div>
+      <div class="set-buttons" style="margin-top:12px">
+        <button class="btn small primary" id="fdNew">+ Ferien / freier Tag</button>
+        <button class="btn small" id="fdIcs">Aus Kalenderdatei (.ics) …</button>
+        ${past.length ? `<button class="btn small" id="fdPast">Vergangene entfernen (${past.length})</button>` : ''}
+        <input type="file" id="fdFile" accept=".ics,text/calendar" hidden>
       </div>
+      <div class="hint" style="margin-top:8px">An diesen Tagen gibt es keinen Unterricht: Die Planung überspringt sie, der Stundenplan zeigt sie grau. Der Countdown auf der Startseite zählt bis zu den nächsten Ferien (Einträge mit „Ferien“ im Namen oder ab drei Tagen).
+        Ferientermine deines Bundeslands gibt es als Kalenderdatei (.ics) z. B. bei schulferien.org.</div>
+    </section>
+    <section class="set-card">
       <div class="field"><label>Nächste Zeugniskonferenz</label><input id="mZeugnis" type="date" value="${m.zeugnisDatum || ''}"></div>
       <div class="field"><label>Halbjahr beim Öffnen eines Kurses</label>
         <select id="mHalfYear">
@@ -84,10 +106,89 @@ function setSchuljahr(body) {
         </select>
       </div>
     </section>`;
-  document.getElementById('mFerienDate').onchange = e => { m.ferienDatum = e.target.value; setSaved(); };
-  document.getElementById('mFerienLabel').onchange = e => { m.ferienLabel = e.target.value.trim() || 'Ferien'; setSaved(); };
+  document.getElementById('fdNew').onclick = () => openFreeDayForm(null);
+  body.querySelectorAll('[data-fdedit]').forEach(b => b.onclick = () => openFreeDayForm(b.dataset.fdedit));
+  body.querySelectorAll('[data-fddel]').forEach(b => b.onclick = () => {
+    const f = freeDays().find(x => x.id === b.dataset.fddel); if (!f) return;
+    m.freeDays = freeDays().filter(x => x !== f); save(); renderSettings();
+    toast(`„${f.label || 'Frei'}“ entfernt.`, { label: 'Rückgängig', fn: () => { m.freeDays.push(f); save(); renderSettings(); } });
+  });
+  const fp = document.getElementById('fdPast');
+  if (fp) fp.onclick = () => {
+    const keep = freeDays().filter(f => (f.to || f.from) >= today);
+    const removed = freeDays().filter(f => (f.to || f.from) < today);
+    m.freeDays = keep; save(); renderSettings();
+    toast(`${removed.length} entfernt.`, { label: 'Rückgängig', fn: () => { m.freeDays = m.freeDays.concat(removed); save(); renderSettings(); } });
+  };
+  const file = document.getElementById('fdFile');
+  document.getElementById('fdIcs').onclick = () => file.click();
+  file.onchange = () => { const f = file.files[0]; if (f) f.text().then(importFreeDaysICS, () => toast('Die Datei konnte nicht gelesen werden.')); };
   document.getElementById('mZeugnis').onchange = e => { m.zeugnisDatum = e.target.value; setSaved(); };
   document.getElementById('mHalfYear').onchange = e => { m.halfYear = e.target.value || 'auto'; setSaved(); };
+}
+
+/* Ferien / freien Tag anlegen oder ändern */
+function openFreeDayForm(id) {
+  const f = id ? freeDays().find(x => x.id === id) : null;
+  modal(f ? 'Ferien / freier Tag' : 'Ferien oder freien Tag eintragen', `
+    <div class="field"><label>Bezeichnung</label><input id="fdLabel" type="text" value="${esc(f ? f.label : '')}" placeholder="z. B. Herbstferien, Brückentag, Studientag" maxlength="80"></div>
+    <div class="row2">
+      <div class="field"><label>Von</label><input id="fdFrom" type="date" value="${f ? f.from : ''}"></div>
+      <div class="field"><label>Bis (einschließlich)</label><input id="fdTo" type="date" value="${f ? f.to || f.from : ''}"></div>
+    </div>
+    <div class="hint">Ein einzelner Tag: „Bis“ leer lassen oder gleich „Von“.</div>`, [
+    { label: 'Abbrechen', onClick: closeModal },
+    { label: 'Speichern', cls: 'primary', onClick: () => {
+      const from = val('fdFrom'); let to = val('fdTo') || from;
+      if (!from) return toast('Bitte ein Datum angeben.');
+      if (to < from) return toast('„Bis“ liegt vor „Von“.');
+      const label = val('fdLabel').trim() || (to === from ? 'Freier Tag' : 'Ferien');
+      if (f) Object.assign(f, { label, from, to });
+      else data.meta.freeDays = freeDays().concat([{ id: uid(), label, from, to }]);
+      save(); closeModal(); renderSettings();
+    }},
+  ]);
+  /* „Bis" folgt „Von", solange es leer oder davor ist */
+  const fromEl = document.getElementById('fdFrom'), toEl = document.getElementById('fdTo');
+  fromEl.addEventListener('change', () => { if (!toEl.value || toEl.value < fromEl.value) toEl.value = fromEl.value; });
+  setTimeout(() => { const el = document.getElementById('fdLabel'); if (el && !f) el.focus(); }, 50);
+}
+
+/* Ferien aus einer Kalenderdatei: jeder Termin ist ein Kandidat. Vorschau
+   mit Häkchen — vorausgewählt ist, was noch nicht vorbei und noch nicht
+   eingetragen ist. Ganztägige Termine enden in iCalendar am Folgetag. */
+function importFreeDaysICS(text) {
+  let evs = [];
+  try { evs = parseICS(text); } catch (e) {}
+  const prevDay = iso => { const d = new Date(iso + 'T00:00:00'); d.setDate(d.getDate() - 1); return dateToISO(d); };
+  const seen = new Set();
+  const items = evs.filter(e => e.date).map(e => {
+    let to = e.endDate || e.date;
+    if (e.endDate && e.endAllDay && e.endDate > e.date) to = prevDay(e.endDate);
+    if (to < e.date) to = e.date;
+    return { label: String(e.title || 'Ferien').trim().slice(0, 80), from: e.date, to };
+  }).filter(x => { const k = `${x.from}|${x.to}|${x.label}`; if (seen.has(k)) return false; seen.add(k); return true; })
+    .sort((a, b) => a.from.localeCompare(b.from));
+  if (!items.length) return toast('Keine Termine in der Datei gefunden.');
+  const today = todayISO();
+  const have = x => freeDays().some(f => f.from === x.from && (f.to || f.from) === x.to);
+  const rows = items.map((x, i) => {
+    const dup = have(x), over = x.to < today;
+    return `<label class="check-row fd-imp ${dup || over ? 'fd-past' : ''}"><input type="checkbox" data-i="${i}" ${dup || over ? '' : 'checked'}>
+      <span><b>${esc(x.label)}</b><small>${fmtFreeRange(x)}${dup ? ' · schon eingetragen' : over ? ' · vorbei' : ''}</small></span></label>`;
+  }).join('');
+  modal('Ferien aus Kalenderdatei', `
+    <p class="cs-sub" style="margin-top:0">${items.length} ${items.length === 1 ? 'Termin' : 'Termine'} gefunden. Jeder ausgewählte Termin wird als Ferien bzw. freier Tag übernommen — die Bezeichnung lässt sich danach ändern.</p>
+    <div class="fd-imp-list">${rows}</div>`, [
+    { label: 'Abbrechen', onClick: closeModal },
+    { label: 'Übernehmen', cls: 'primary', onClick: () => {
+      const pick = [...document.querySelectorAll('.fd-imp input:checked')].map(i => items[+i.dataset.i]).filter(x => !have(x));
+      if (!pick.length) return toast('Nichts ausgewählt.');
+      data.meta.freeDays = freeDays().concat(pick.map(x => ({ id: uid(), label: x.label, from: x.from, to: x.to })));
+      save(); closeModal(); renderSettings();
+      toast(`${pick.length} ${pick.length === 1 ? 'Eintrag' : 'Einträge'} übernommen.`);
+    }},
+  ]);
 }
 
 /* ---------- Stundenplan ---------- */
@@ -108,6 +209,13 @@ function setStundenplan(body) {
         </select>
         <div class="hint">Danach wechselt es jede Woche automatisch. Einzelne Stunden setzt du im Plan auf A oder B.</div>
       </div>
+      <div class="field" id="mABSkipWrap" style="${abActive() ? '' : 'display:none'}"><label>In den Ferien</label>
+        <select id="mABSkip">
+          <option value="0" ${data.timetable.abSkipFree ? '' : 'selected'}>A/B wechselt weiter, auch in den Ferien</option>
+          <option value="1" ${data.timetable.abSkipFree ? 'selected' : ''}>A/B pausiert — nach den Ferien geht es weiter, wo es aufgehört hat</option>
+        </select>
+        <div class="hint">Als Ferien zählt eine Woche, die Montag bis Freitag frei ist (Einstellungen → Schuljahr).</div>
+      </div>
       <div class="field"><label>Stundenzeiten</label>
         <div class="set-buttons"><button class="btn" id="mPeriods">Zeiten bearbeiten</button></div>
         <div class="hint">${periods.length} Stunden, ${periods[0] ? periods[0].start : '–'} bis ${periods.length ? periods[periods.length - 1].end : '–'} Uhr.</div>
@@ -117,9 +225,11 @@ function setStundenplan(body) {
       </div>
     </section>`;
   const abSel = document.getElementById('mAB'), abWrap = document.getElementById('mABWeekWrap'), abWeek = document.getElementById('mABWeek');
+  const skipWrap = document.getElementById('mABSkipWrap');
   const applyAB = () => {
     const wantAB = abSel.value === '1';
     abWrap.style.display = wantAB ? '' : 'none';
+    skipWrap.style.display = wantAB ? '' : 'none';
     data.timetable.abWeeks = wantAB;
     if (wantAB) abSetCurrentWeek(Number(abWeek.value) || 1);
     planWeek = 0;                          // Stundenplan wieder auf die laufende Woche
@@ -127,6 +237,14 @@ function setStundenplan(body) {
   };
   abSel.onchange = applyAB;
   abWeek.onchange = applyAB;
+  /* Umschalten lässt die laufende Woche, wie sie ist */
+  document.getElementById('mABSkip').onchange = e => {
+    const cur = abWeekOf();
+    data.timetable.abSkipFree = e.target.value === '1';
+    abSetCurrentWeek(cur);
+    planWeek = 0;
+    setSaved();
+  };
   document.getElementById('mPeriods').onclick = openPeriodsEditor;
   document.getElementById('mTtIcs').onclick = exportTimetableICS;
 }

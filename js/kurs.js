@@ -20,8 +20,6 @@ function renderKurse() {
   const cards = data.courses.map(c => {
     const col = courseColor(c.id);
     const m = courseMean(c), gc = gradeColor(m);
-    const next = upcomingSlots(c.id, 1)[0];
-    const np = next ? plansAtSlot(next)[0] : null;
     const todos = (data.todos || []).filter(t => !t.done && t.courseId === c.id).length;
     const termine = upcomingTermine().filter(t => t.courseId === c.id).length;
     const foot = [todos ? `${todos} ${todos === 1 ? 'Todo' : 'Todos'}` : '', termine ? `${termine} ${termine === 1 ? 'Termin' : 'Termine'}` : ''].filter(Boolean).join(' · ');
@@ -29,9 +27,6 @@ function renderKurse() {
       <div class="cc-top">
         <div class="kc-head"><div><div class="cc-subject">${esc(c.subject)}</div><div class="cc-class">${esc(c.className)}</div></div>
           <span class="cc-tag" style="background:${m == null ? 'var(--accent-soft)' : gc.bg};color:${m == null ? 'var(--accent-ink)' : gc.fg}">Ø ${fmtGrade(m, c.scale, true)}</span></div>
-        <div class="kc-next">${next
-          ? `<span>Nächste Stunde · ${esc(slotLabel(next))}</span><b class="${np ? '' : 'kc-open'}">${np ? esc(planTitle(np)) : 'noch nicht geplant'}</b>`
-          : '<span>Nicht im Stundenplan</span>'}</div>
       </div>
       <div class="cc-foot"><span>${c.students.filter(studentActive).length} Schüler:innen</span><span>${foot}</span></div>
     </div>`;
@@ -42,11 +37,9 @@ function renderKurse() {
       <div><h1>Kurse</h1><div class="sub">${data.courses.length} Kurse · ${studCount} Schüler:innen insgesamt</div></div>
       <button class="btn primary" id="kuNew">+ Neuer Kurs</button>
     </div>
-    <div class="course-grid">${cards}
-      <div class="course-card add-card" id="kuAdd"><span class="plus">+</span> Neuer Kurs</div></div>`;
+    <div class="course-grid">${cards || '<div class="empty-state" style="grid-column:1/-1"><p>Noch keine Kurse. Lege deinen ersten Kurs an.</p></div>'}</div>`;
   bindUpdateBanner();
   document.getElementById('kuNew').onclick = () => openCourseForm();
-  document.getElementById('kuAdd').onclick = () => openCourseForm();
   app().querySelectorAll('[data-kurs]').forEach(el => el.onclick = () => go({ name: 'kurs', courseId: el.dataset.kurs }));
 }
 
