@@ -14,7 +14,7 @@
 'use strict';
 
 let studentTalk = false;          // Gesprächsmodus
-let studentVerlauf = 'alle';      // 'alle' | 'muendlich' | 'schriftlich'
+let studentVerlauf = 'alle';      // 'alle' | Kategorie-id ('muendlich', 'schriftlich', eigene)
 
 function renderStudent() {
   const c = getCourse(route.courseId);
@@ -73,19 +73,18 @@ function renderStudent() {
     const hy = c.halfYears[hyKey];
     const comp = computeHalf(c, hyKey, s.id);
     const eff = effGesamt(c, hyKey, s.id);
-    const schrift = hy.columns.filter(x => x.type === 'schriftlich');
-    const muend = hy.columns.filter(x => x.type === 'muendlich');
     const manual = eff.manual != null && eff.computed != null;
+    const catBlock = (b, i) => {
+      const cols = hy.columns.filter(x => x.type === b.id);
+      const wTxt = b.counts ? `${fmtNum(b.pct)} %` : b.weight > 0 ? '' : 'zählt nicht';
+      return `<div class="cs-sub" style="margin:${i ? '8px' : '0'} 0 4px"><i class="cat-dot" style="background:${b.cat.color}"></i>${esc(b.cat.name)}${wTxt ? ` · ${wTxt}` : ''}</div>
+      ${cols.length ? cols.map(col => leistungRow(col, hyKey, b.parts)).join('') : '<div class="cs-line cs-sub"><span>keine</span><span></span></div>'}
+      ${hy.sonstige.filter(x => x.scope === b.id).map(sonstRow).join('')}
+      <div class="cs-line"><span><b>Ø ${esc(b.cat.std ? b.cat.adj : b.cat.name)}</b></span><span class="cs-vals">${fmtGrade(b.avg, scale, true)}</span></div>`;
+    };
     return `<div class="calc-block calc-sheet">
       <h3>${hyKey}. Halbjahr</h3>
-      <div class="cs-sub" style="margin-bottom:4px">Schriftlich</div>
-      ${schrift.length ? schrift.map(col => leistungRow(col, hyKey, comp.wParts)).join('') : '<div class="cs-line cs-sub"><span>keine</span><span></span></div>'}
-      ${hy.sonstige.filter(x => x.scope === 'schriftlich').map(sonstRow).join('')}
-      <div class="cs-line"><span><b>Ø schriftlich</b></span><span class="cs-vals">${fmtGrade(comp.wAvg, scale, true)}</span></div>
-      <div class="cs-sub" style="margin:8px 0 4px">Mündlich</div>
-      ${muend.length ? muend.map(col => leistungRow(col, hyKey, comp.mParts)).join('') : '<div class="cs-line cs-sub"><span>keine</span><span></span></div>'}
-      ${hy.sonstige.filter(x => x.scope === 'muendlich').map(sonstRow).join('')}
-      <div class="cs-line"><span><b>Ø mündlich</b></span><span class="cs-vals">${fmtGrade(comp.mAvg, scale, true)}</span></div>
+      ${comp.cats.map(catBlock).join('')}
       ${hy.sonstige.filter(x => x.scope === 'allgemein').map(sonstRow).join('')}
       <div class="cs-line total"><span>Gesamtnote${manual ? ' (manuell)' : ''}</span>
         <span class="cs-vals">${valChip(eff.value, true)}${manual ? ` <span class="cs-sub">(${fmtGrade(eff.computed, scale, true)})</span>` : ''}</span></div>
@@ -125,9 +124,13 @@ function renderStudent() {
       <button class="icon-btn sd-note-del" data-del="${n.id}" aria-label="Notiz löschen">×</button>
     </div>`).join('') || '<div class="cs-sub">Noch keine Notizen.</div>'}</div>`;
 
-  /* ---------- Verlauf ---------- */
-  const verlaufTabs = `<div class="seg sd-vseg" id="sdVSeg">${[['alle', 'Alle'], ['muendlich', 'Mündlich'], ['schriftlich', 'Schriftlich']].map(([k, l]) =>
-    `<button data-v="${k}" class="${studentVerlauf === k ? 'active' : ''}">${l}</button>`).join('')}</div>`;
+  /* ---------- Verlauf ----------
+     Alle, Mündlich und Schriftlich direkt antippbar; eigene Kategorien des
+     Kurses als weiterer Knopf bzw. ab zwei in einem Auswahlfeld. */
+  const vCats = courseCats(c).filter(k => !k.std);
+  if (studentVerlauf !== 'alle' && !isStdCat(studentVerlauf) && !vCats.some(k => k.id === studentVerlauf)) studentVerlauf = 'alle';
+  const verlaufTabs = segWithMore('sdVSeg', [['alle', 'Alle'], ['muendlich', 'Mündlich'], ['schriftlich', 'Schriftlich']],
+    vCats.map(k => [k.id, k.name]), studentVerlauf).replace('class="seg"', 'class="seg sd-vseg"');
 
   const prev = list[idx - 1], next = list[idx + 1];
   app().innerHTML = `
@@ -190,7 +193,7 @@ function renderStudent() {
   const info = document.getElementById('sdInfo'); if (info) info.onclick = () => openInfoEdit(c, s, () => renderStudent());
   const talk = document.getElementById('sdTalk'); if (talk) talk.onclick = () => { studentTalk = true; renderStudent(); };
   const talkOff = document.getElementById('sdTalkOff'); if (talkOff) talkOff.onclick = () => { studentTalk = false; renderStudent(); };
-  app().querySelectorAll('#sdVSeg button').forEach(b => b.onclick = () => { studentVerlauf = b.dataset.v; renderStudent(); });
+  bindSegWithMore('sdVSeg', v => { studentVerlauf = v; renderStudent(); });
 
   app().querySelectorAll('.sd-grade').forEach(row => row.onclick = () => {
     const col = c.halfYears[row.dataset.hy].columns.find(x => x.id === row.dataset.col);
@@ -247,7 +250,7 @@ document.addEventListener('keydown', e => {
 function sdVerlaufSvg(c, s, type) {
   const pts = [];
   ['1', '2'].forEach(h => c.halfYears[h].columns.forEach(col => {
-    if (col.type !== 'schriftlich' && col.type !== 'muendlich') return;
+    if (col.type === 'zwischenstand') return;
     if (type !== 'alle' && col.type !== type) return;
     const v = (data.grades[s.id] || {})[col.id];
     if (v == null || isNaN(v)) return;
@@ -270,7 +273,7 @@ function sdVerlaufSvg(c, s, type) {
   const avgPts = pts.map((p, i) => (p.avg == null ? null : `${x(i).toFixed(1)},${y(p.avg).toFixed(1)}`)).filter(Boolean).join(' ');
   const avgLine = avgPts ? `<polyline points="${avgPts}" fill="none" stroke="var(--ink-faint)" stroke-width="1.2" stroke-dasharray="4 3"/>` : '';
   const line = `<polyline points="${pts.map((p, i) => `${x(i).toFixed(1)},${y(p.v).toFixed(1)}`).join(' ')}" fill="none" stroke="var(--accent)" stroke-width="1.6" opacity=".55"/>`;
-  const dots = pts.map((p, i) => `<circle cx="${x(i).toFixed(1)}" cy="${y(p.v).toFixed(1)}" r="4.5" fill="${p.type === 'schriftlich' ? '#3f6fb0' : '#7a63bd'}"><title>${esc(p.label)}: ${fmtGrade(p.v, scale, false)}${p.date ? ' (' + fmtDate(p.date) + ')' : ''}${p.avg != null ? ' · Kurs Ø ' + fmtGrade(p.avg, scale, true) : ''}</title></circle>`).join('');
+  const dots = pts.map((p, i) => `<circle cx="${x(i).toFixed(1)}" cy="${y(p.v).toFixed(1)}" r="4.5" fill="${catColor(p.type)}"><title>${esc(p.label)}: ${fmtGrade(p.v, scale, false)}${p.date ? ' (' + fmtDate(p.date) + ')' : ''}${p.avg != null ? ' · Kurs Ø ' + fmtGrade(p.avg, scale, true) : ''}</title></circle>`).join('');
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet" style="display:block">${grid}${bound}${avgLine}${line}${dots}</svg>
-    <div class="legend" style="margin-top:6px"><span><i style="background:#3f6fb0"></i> schriftlich</span><span><i style="background:#7a63bd"></i> mündlich</span><span><i style="background:transparent;border:none;border-top:2px dashed var(--ink-faint);height:0;width:16px"></i> Kursschnitt</span></div>`;
+    <div class="legend" style="margin-top:6px">${courseCats(c).filter(k => pts.some(p => p.type === k.id)).map(k => `<span><i style="background:${k.color}"></i> ${esc(k.std ? k.adj : k.name)}</span>`).join('')}<span><i style="background:transparent;border:none;border-top:2px dashed var(--ink-faint);height:0;width:16px"></i> Kursschnitt</span></div>`;
 }

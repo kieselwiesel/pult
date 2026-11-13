@@ -19,6 +19,7 @@ const DEFAULT_DATA = () => ({
     lastBackup: '',      // ISO-Datum des letzten JSON-Backups
     tableLayout: 'standard',  // 'standard' | 'invers' (Notentabelle)
     halfYear: 'auto',    // 'auto' | '1' | '2' — Halbjahr beim Öffnen eines Kurses
+    categories: [],      // eigene Notenkategorien { id, name, color } (siehe „Notenkategorien")
   },
   courses: [],
   grades: {},          // grades[studentId][columnId] = punkte(0..15)
@@ -476,10 +477,98 @@ function applyBonus(base, sonstigeList, sId) {
   });
   return val;
 }
+/* ============================================================
+   Notenkategorien
+   ------------------------------------------------------------
+   Schriftlich und Mündlich sind fest eingebaut; eigene Kategorien
+   (data.meta.categories: [{ id, name, color }]) kommen hinzu. Eine
+   Notenspalte gehört über col.type zu genau einer Kategorie, eine Sonstige
+   Leistung über so.scope ('allgemein' oder eine Kategorie).
+
+   Je Kurs: c.cats = [{ id, weight }] — welche Kategorien der Kurs führt
+   und wie stark sie zählen (Summe 100). Fehlt c.cats (ältere Daten), gilt
+   weightWritten/weightOral. Beide Felder werden weiter mitgeführt, damit
+   ältere Versionen und Ausdrucke stimmig bleiben.
+
+   Rechnung: Kategorien ohne Note zählen nicht, ihr Anteil verteilt sich
+   anteilig auf die übrigen. Kategorien mit 0 % werden angezeigt, zählen
+   aber nicht mit — auch wenn dort Noten stehen.
+   ============================================================ */
+const STD_CATS = [
+  { id: 'schriftlich', name: 'Schriftlich', short: 'schr.',  adj: 'schriftlich', color: '#3f6fb0', std: true },
+  { id: 'muendlich',   name: 'Mündlich',    short: 'mündl.', adj: 'mündlich',    color: '#7a63bd', std: true },
+];
+/* Farben für eigene Kategorien — gut unterscheidbar von Blau/Violett */
+const CAT_COLORS = ['#2f8a6b', '#c0762a', '#b04a6a', '#5f7f22', '#2a7f9a', '#8a6a2a', '#6b6f78'];
+const isStdCat = id => id === 'schriftlich' || id === 'muendlich';
+function customCats() { return Array.isArray(data.meta.categories) ? data.meta.categories : []; }
+function catDef(id) {
+  const std = STD_CATS.find(x => x.id === id);
+  if (std) return std;
+  const k = customCats().find(x => x.id === id);
+  const name = k ? (k.name || 'Kategorie') : 'Gelöschte Kategorie';
+  return { id, name, short: name, adj: null, color: (k && k.color) || '#6b6f78', std: false };
+}
+const catName = id => catDef(id).name;
+const catColor = id => catDef(id).color;
+/* „zählt schriftlich" / „zählt in „Praxis"" */
+function catCountsText(id) {
+  const d = catDef(id);
+  return d.std ? `zählt ${d.adj}` : `zählt in „${d.name}“`;
+}
+/* Tabellenkopf: Klasse und ggf. Farbe der Gruppe */
+function catGrpAttr(id) {
+  if (id === 'schriftlich') return 'class="grp-schrift"';
+  if (id === 'muendlich') return 'class="grp-muend"';
+  return `class="grp-cat" style="--cat:${catColor(id)}"`;
+}
+function catGrpClass(id) { return id === 'schriftlich' ? 'grp-schrift' : id === 'muendlich' ? 'grp-muend' : 'grp-cat'; }
+function catGrpStyle(id) { return isStdCat(id) ? '' : `--cat:${catColor(id)}`; }
+
+/* Kategorien eines Kurses in fester Reihenfolge, mit Gewicht.
+   Kategorien, in denen Noten stehen, die der Kurs aber nicht (mehr) führt,
+   werden mit 0 % angehängt — so geht nie eine Note verloren. */
+function courseCats(course) {
+  let list = Array.isArray(course.cats) && course.cats.length ? course.cats
+    : [{ id: 'schriftlich', weight: course.weightWritten != null ? course.weightWritten : 40 },
+       { id: 'muendlich', weight: course.weightOral != null ? course.weightOral : 60 }];
+  const out = [], seen = new Set();
+  const add = (id, w) => { if (seen.has(id)) return; seen.add(id); out.push(Object.assign({}, catDef(id), { weight: Number(w) || 0 })); };
+  STD_CATS.forEach(sc => { const e = list.find(x => x.id === sc.id); add(sc.id, e ? e.weight : 0); });
+  list.forEach(x => add(x.id, x.weight));
+  ['1', '2'].forEach(h => {
+    const hy = (course.halfYears || {})[h]; if (!hy) return;
+    hy.columns.forEach(col => { if (col.type !== 'zwischenstand') add(col.type, 0); });
+    hy.sonstige.forEach(so => { if (so.scope && so.scope !== 'allgemein') add(so.scope, 0); });
+  });
+  return out;
+}
+/* Gewichte eines Kurses setzen; hält weightWritten/weightOral mit */
+function setCourseCats(course, list) {
+  course.cats = list.map(x => ({ id: x.id, weight: clamp(Number(x.weight) || 0, 0, 100) }));
+  const w = id => (course.cats.find(x => x.id === id) || { weight: 0 }).weight;
+  course.weightWritten = w('schriftlich'); course.weightOral = w('muendlich');
+}
+/* Gewichtung als Kurztext: „40/60" bei zwei Kategorien, sonst „Schriftlich 40 % · …" */
+function weightSummary(course, long) {
+  const cats = courseCats(course);
+  if (cats.length === 2 && !long) return `${cats[0].weight}/${cats[1].weight}`;
+  return cats.map(k => `${k.name} ${fmtNum(k.weight)} %`).join(' · ');
+}
+/* Gewichte einer Person (individuell oder vom Kurs).
+   weightOverride[sId][hyKey]: Zahl (alt: % schriftlich) oder { catId: % } */
 function getWeight(course, sId, hyKey) {
+  const cats = courseCats(course);
+  const map = {}; cats.forEach(k => map[k.id] = k.weight);
   const ov = (data.weightOverride[sId] || {})[hyKey];
-  if (ov != null && !isNaN(ov)) return { w: ov, m: 100 - ov, custom: true };
-  return { w: course.weightWritten, m: course.weightOral, custom: false };
+  let custom = false;
+  if (typeof ov === 'number' && !isNaN(ov)) {
+    cats.forEach(k => map[k.id] = 0);
+    map.schriftlich = ov; map.muendlich = 100 - ov; custom = true;
+  } else if (ov && typeof ov === 'object') {
+    cats.forEach(k => map[k.id] = Number(ov[k.id]) || 0); custom = true;
+  }
+  return { map, w: map.schriftlich || 0, m: map.muendlich || 0, custom };
 }
 
 /* ---------- Gewichtung einzelner Noten ----------
@@ -511,6 +600,18 @@ function weightPill(col, style) {
   return lbl ? ` <span class="pill" style="font-size:9px;padding:1px 5px;vertical-align:middle;${style||''}" title="${esc(weightTitle(col))}">${lbl}</span>` : '';
 }
 
+/* Erklärung zum festen Anteil einer Note — Bezug ist das Kursgewicht ihrer Kategorie */
+function fixedPctHint(c, catId, p) {
+  const k = courseCats(c).find(x => x.id === catId) || Object.assign({}, catDef(catId), { weight: 0 });
+  const b = k.weight;
+  if (!b) return `Anteil an der Gesamtnote. ${k.name} zählt in diesem Kurs derzeit 0 % — die Note wirkt sich nicht aus.`;
+  const others = k.std ? `übrigen ${k.adj}en Noten` : `übrigen Noten in „${k.name}“`;
+  const whole = k.std ? `der ganze ${k.adj}e Anteil` : `der ganze Anteil von „${k.name}“`;
+  const restText = p > 0 && p < b
+    ? ` Die ${others} teilen sich dann noch ${fmtNum(b - p)} %.`
+    : (p > 0 && p >= b ? ` Das ist bereits ${whole} — die ${others} zählen dann nicht mehr.` : '');
+  return `Anteil an der Gesamtnote. ${k.name} zählt insgesamt ${fmtNum(b)} %.${restText}`;
+}
 /* benotete Leistungen eines Bereichs als [{ col, v }] */
 function blockEntries(cols, sId) {
   const gr = data.grades[sId] || {};
@@ -548,36 +649,47 @@ function weighEntries(entries, blockPct) {
   return { avg, parts };
 }
 
-/* Reine Rechnung eines Halbjahres (ohne manuelle Überschreibung) */
-function computeHalf(course, hyKey, sId) {
+/* Reine Rechnung eines Halbjahres (ohne manuelle Überschreibung).
+   extra: { type, value } — eine hypothetische Note (Simulator), zählt einfach.
+   Liefert je Kategorie einen Block (cats) und für ältere Aufrufer die
+   Kurzformen wAvg/mAvg usw. von Schriftlich und Mündlich. */
+function computeHalf(course, hyKey, sId, extra) {
   const hy = course.halfYears[hyKey];
-  const schriftCols = hy.columns.filter(c => c.type === 'schriftlich');
-  const muendCols   = hy.columns.filter(c => c.type === 'muendlich');
-  const sEnt = blockEntries(schriftCols, sId);
-  const mEnt = blockEntries(muendCols, sId);
-
   const wt = getWeight(course, sId, hyKey);
-  /* Fehlt ein Bereich ganz, trägt der andere die volle Note — dann sind auch
-     die ausgewiesenen Prozente die an der Gesamtnote. */
-  const both = sEnt.length && mEnt.length;
-  const wPct = both ? wt.w : 100;
-  const mPct = both ? wt.m : 100;
-  const wPart = weighEntries(sEnt, wPct);
-  const mPart = weighEntries(mEnt, mPct);
-
-  const wRaw = wPart.avg;
-  const mRaw = mPart.avg;
-  const wAvg = applyBonus(wRaw, hy.sonstige.filter(s => s.scope === 'schriftlich'), sId);
-  const mAvg = applyBonus(mRaw, hy.sonstige.filter(s => s.scope === 'muendlich'),  sId);
-
-  let gesamt;
-  if (wAvg == null && mAvg == null) gesamt = null;
-  else if (wAvg == null) gesamt = mAvg;
-  else if (mAvg == null) gesamt = wAvg;
-  else gesamt = wAvg * (wt.w / 100) + mAvg * (wt.m / 100);
+  const blocks = courseCats(course).map(cat => {
+    let ent = blockEntries(hy.columns.filter(c => c.type === cat.id), sId);
+    if (extra && extra.type === cat.id) ent = ent.concat({ col: { id: '__sim' }, v: extra.value });
+    return { id: cat.id, cat, ent, weight: wt.map[cat.id] || 0 };
+  });
+  /* Nur Kategorien mit Note und Gewicht zählen; ihr Anteil wird auf 100 % hochgerechnet. */
+  const counting = blocks.filter(b => b.ent.length && b.weight > 0);
+  const tot = counting.reduce((a, b) => a + b.weight, 0);
+  let gesamt = null;
+  blocks.forEach(b => {
+    const counts = counting.includes(b);
+    b.pct = counts ? b.weight / tot * 100 : 0;          // tatsächlicher Anteil an der Gesamtnote
+    const part = weighEntries(b.ent, counts ? b.pct : 100);
+    b.raw = part.avg;
+    b.parts = counts ? part.parts : part.parts.map(p => Object.assign({}, p, { pct: 0 }));
+    b.avg = applyBonus(b.raw, hy.sonstige.filter(s => s.scope === b.id), sId);
+    b.counts = counts;
+    if (counts && b.avg != null) gesamt = (gesamt || 0) + b.avg * b.pct / 100;
+  });
   gesamt = applyBonus(gesamt, hy.sonstige.filter(s => s.scope === 'allgemein'), sId);
 
-  return { wRaw, mRaw, wAvg, mAvg, gesamt, wt, wPct, mPct, wParts: wPart.parts, mParts: mPart.parts };
+  const W = blocks.find(b => b.id === 'schriftlich'), M = blocks.find(b => b.id === 'muendlich');
+  return {
+    cats: blocks, gesamt, wt,
+    wRaw: W.raw, mRaw: M.raw, wAvg: W.avg, mAvg: M.avg,
+    wPct: W.pct, mPct: M.pct, wParts: W.parts, mParts: M.parts,
+  };
+}
+/* Schnitt einer Kategorie (oder 'gesamt' = berechnete Gesamtnote) */
+function catAvg(course, hyKey, sId, catId) {
+  const comp = computeHalf(course, hyKey, sId);
+  if (catId === 'gesamt') return comp.gesamt;
+  const b = comp.cats.find(x => x.id === catId);
+  return b ? b.avg : null;
 }
 /* effektive Gesamtnote eines Halbjahres (manuell vor berechnet) */
 function effGesamt(course, hyKey, sId) {
@@ -686,7 +798,7 @@ function verlaufSvg(series, scale) {
   }
   const line = `<polyline points="${series.map((p,i)=>`${x(i).toFixed(1)},${y(p.value).toFixed(1)}`).join(' ')}" fill="none" stroke="var(--accent)" stroke-width="1.5" opacity=".5"/>`;
   const dots = series.map((p, i) => {
-    const col = p.type === 'schriftlich' ? '#3f6fb0' : '#7a63bd';
+    const col = catColor(p.type);
     return `<circle cx="${x(i).toFixed(1)}" cy="${y(p.value).toFixed(1)}" r="4" fill="${col}"><title>${esc(p.label)}: ${fmtGrade(p.value, scale, false)}${p.date?' ('+fmtDate(p.date)+')':''}</title></circle>`;
   }).join('');
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="xMidYMid meet" style="display:block">${grid}${boundary}${line}${dots}</svg>
@@ -694,24 +806,7 @@ function verlaufSvg(series, scale) {
 }
 /* Simulation: Gesamtnote eines Halbjahres mit einer hypothetisch ergänzten Note */
 function simulateGesamt(course, hyKey, sId, extra) {
-  const hy = course.halfYears[hyKey];
-  let schrift = blockEntries(hy.columns.filter(c => c.type === 'schriftlich'), sId);
-  let muend = blockEntries(hy.columns.filter(c => c.type === 'muendlich'), sId);
-  /* die hypothetische Note zählt einfach (Faktor 1) */
-  if (extra) {
-    const e = { col: { id: '__sim' }, v: extra.value };
-    if (extra.type === 'schriftlich') schrift = schrift.concat(e); else muend = muend.concat(e);
-  }
-  const wt = getWeight(course, sId, hyKey);
-  const both = schrift.length && muend.length;
-  const wAvg = applyBonus(weighEntries(schrift, both ? wt.w : 100).avg, hy.sonstige.filter(s => s.scope === 'schriftlich'), sId);
-  const mAvg = applyBonus(weighEntries(muend, both ? wt.m : 100).avg, hy.sonstige.filter(s => s.scope === 'muendlich'), sId);
-  let g;
-  if (wAvg == null && mAvg == null) g = null;
-  else if (wAvg == null) g = mAvg;
-  else if (mAvg == null) g = wAvg;
-  else g = wAvg * (wt.w / 100) + mAvg * (wt.m / 100);
-  return applyBonus(g, hy.sonstige.filter(s => s.scope === 'allgemein'), sId);
+  return computeHalf(course, hyKey, sId, extra).gesamt;
 }
 function targetOptions(scale, current) {
   let out = '';
@@ -1610,12 +1705,14 @@ function renderCourse() {
   const c = getCourse(route.courseId);
   if (!c) return go({ name: 'home' });
   const hy = c.halfYears[route.hy];
+  /* Ansicht einer Kategorie, die es im Kurs nicht (mehr) gibt → Gesamt */
+  if (!['simpel', 'gesamt'].includes(route.view) && !courseCats(c).some(k => k.id === route.view)) route.view = 'gesamt';
 
   app().innerHTML = `
     <div class="page-head">
       <div>
         <h1>${esc(c.subject)} <span style="color:var(--ink-faint);font-weight:600">${esc(c.className)}</span></h1>
-        <div class="sub">${scaleName(c.scale)} · Gewichtung ${c.weightWritten}% schr. · ${c.weightOral}% mündl.${route.hy==='2'?` · Endjahr ${c.weightHY1}/${c.weightHY2}`:''}</div>
+        <div class="sub">${scaleName(c.scale)} · Gewichtung ${courseCats(c).map(k => `${fmtNum(k.weight)}% ${esc(k.std ? k.short : k.name)}`).join(' · ')}${route.hy==='2'?` · Endjahr ${c.weightHY1}/${c.weightHY2}`:''}</div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn small" id="btnZwischen">+ Zwischenstand</button>
@@ -1632,12 +1729,8 @@ function renderCourse() {
     </div>
 
     <div class="toolbar">
-      <div class="seg" id="viewSeg">
-        <button data-v="simpel" class="${route.view==='simpel'?'active':''}">Simpel</button>
-        <button data-v="gesamt" class="${route.view==='gesamt'?'active':''}">Gesamt</button>
-        <button data-v="schriftlich" class="${route.view==='schriftlich'?'active':''}">Schriftlich</button>
-        <button data-v="muendlich" class="${route.view==='muendlich'?'active':''}">Mündlich</button>
-      </div>
+      ${segWithMore('viewSeg', [['simpel', 'Simpel'], ['gesamt', 'Gesamt'], ['schriftlich', 'Schriftlich'], ['muendlich', 'Mündlich']],
+        courseCats(c).filter(k => !k.std).map(k => [k.id, k.name]), route.view)}
       <div class="spacer"></div>
       <button class="btn small" id="btnAdd">+ Leistung</button>
       <button class="btn small primary" id="btnDurch">Durchtippen</button>
@@ -1658,7 +1751,7 @@ function renderCourse() {
   `;
 
   document.querySelectorAll('.tab').forEach(t => t.onclick = () => go({ hy: t.dataset.hy }));
-  document.querySelectorAll('#viewSeg button').forEach(b => b.onclick = () => go({ view: b.dataset.v }));
+  bindSegWithMore('viewSeg', v => go({ view: v }));
   document.getElementById('btnStudents').onclick = () => openStudents(c);
   document.getElementById('btnSeating').onclick = () => { seatPending = null; go({ name: 'seating', courseId: c.id, seatMode: initialSeatMode(c) }); };
   document.getElementById('btnZwischen').onclick = () => createZwischenstand(c);
@@ -1674,18 +1767,64 @@ function renderCourse() {
 /* ============================================================
    Zwischenstand — eingefrorener Notenstand (nicht in Berechnung)
    ============================================================ */
-/* col.source: 'gesamt' | 'muendlich' — welcher Stand eingefroren wird
+/* col.source: 'gesamt' | Kategorie-id ('muendlich', 'schriftlich', eigene) — welcher Stand eingefroren wird
    col.fmt:    'dezimal' (Kommawert) | 'note' (Punkte bzw. Tendenznote, je nach Kurs-Skala)
    col.overrides: { sId: Punkte } — von Hand angepasst, Original bleibt in col.values */
 function snapshotValues(c, hyKey, source) {
   const v = {};
   c.students.forEach(s => {
-    const g = source === 'muendlich' ? computeHalf(c, hyKey, s.id).mAvg : effGesamt(c, hyKey, s.id).value;
+    const g = !source || source === 'gesamt' ? effGesamt(c, hyKey, s.id).value : catAvg(c, hyKey, s.id, source);
     if (g != null) v[s.id] = g;
   });
   return v;
 }
-function zwSourceName(col) { return col.source === 'muendlich' ? 'mündlichen Stand' : 'Gesamtstand'; }
+function zwSourceName(col) {
+  const src = col.source || 'gesamt';
+  if (src === 'gesamt') return 'Gesamtstand';
+  const d = catDef(src);
+  return d.std ? `${d.adj}en Stand` : `Stand „${d.name}“`;
+}
+/* Segment-Umschalter mit Überlauf: die festen Einträge als Knöpfe, weitere
+   (eigene Kategorien) bei einer als Knopf, ab zwei in einem Auswahlfeld. */
+function segWithMore(id, items, more, cur, style) {
+  more = more || [];
+  const btn = ([v, l]) => `<button type="button" data-v="${esc(v)}" class="${v === cur ? 'active' : ''}">${esc(l)}</button>`;
+  const inMore = more.some(([v]) => v === cur);
+  const sel = more.length > 1
+    ? `<select class="seg-more ${inMore ? 'active' : ''}" aria-label="Weitere Kategorien">
+        <option value="" ${inMore ? '' : 'selected'}>Weitere …</option>
+        ${more.map(([v, l]) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`
+    : more.map(btn).join('');
+  return `<div class="seg" id="${id}" ${style ? `style="${style}"` : ''}>${items.map(btn).join('')}${sel}</div>`;
+}
+function bindSegWithMore(id, onPick) {
+  const root = document.getElementById(id); if (!root) return;
+  root.querySelectorAll('button').forEach(b => b.onclick = () => onPick(b.dataset.v));
+  const sel = root.querySelector('select.seg-more');
+  if (sel) sel.onchange = () => { if (sel.value) onPick(sel.value); };
+}
+/* Auswahl, worin eine Note zählt: Segment, solange es nur Schriftlich/Mündlich
+   gibt — mit eigenen Kategorien ein Auswahlfeld.
+   opts.lead / opts.extra: Einträge davor/danach, z. B. [['none', 'Gar nicht']]
+   opts.labels: abweichende Beschriftungen der festen Kategorien
+   opts.customLabel: Beschriftung eigener Kategorien (k => Text) */
+function catPickerHtml(c, id, cur, opts) {
+  opts = opts || {};
+  const order = opts.order || ['schriftlich', 'muendlich'];
+  const cats = courseCats(c);
+  const cl = opts.customLabel || (k => k.name + (k.weight ? '' : ' (0 %)'));
+  const items = (opts.lead || [])
+    .concat(order.map(k => [k, (opts.labels || {})[k] || catName(k)]))
+    .concat(cats.filter(k => !k.std).map(k => [k.id, cl(k)]))
+    .concat(opts.extra || []);
+  if (items.length <= 3) return zwSeg(id, items, cur);
+  return `<select id="${id}" class="cat-picker">${items.map(([v, l]) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
+}
+function bindCatPicker(id, onPick) {
+  const el = document.getElementById(id); if (!el) return;
+  if (el.tagName === 'SELECT') el.onchange = () => onPick(el.value);
+  else bindZwSeg(id, onPick);
+}
 function zwSeg(id, items, cur) {
   return `<div class="seg" id="${id}" style="width:100%">${items.map(([v, l]) =>
     `<button type="button" data-v="${v}" style="flex:1" class="${v===cur?'active':''}">${l}</button>`).join('')}</div>`;
@@ -1712,7 +1851,8 @@ function createZwischenstand(c) {
       <div class="field"><label>Datum</label><input id="zwDate" type="date" value="${todayISO()}"></div>
     </div>
     <div class="field"><label>Was wird eingefroren?</label>
-      ${zwSeg('zwSource', [['gesamt', 'Gesamtstand'], ['muendlich', 'Mündlicher Stand']], source)}</div>
+      ${catPickerHtml(c, 'zwSource', source, { lead: [['gesamt', 'Gesamtstand']], order: ['muendlich', 'schriftlich'],
+        labels: { muendlich: 'Mündlicher Stand', schriftlich: 'Schriftlicher Stand' }, customLabel: k => `Stand „${k.name}“` })}</div>
     ${zwFmtField(c, fmt)}
   `, [
     { label: 'Abbrechen', onClick: closeModal },
@@ -1723,7 +1863,7 @@ function createZwischenstand(c) {
       toast('Zwischenstand eingefroren.');
     }},
   ]);
-  bindZwSeg('zwSource', v => source = v);
+  bindCatPicker('zwSource', v => source = v);
   bindZwSeg('zwFmt', v => fmt = v);
 }
 function openZwischenstand(c, colId) {
@@ -1781,9 +1921,10 @@ function openZwCell(c, sId, colId) {
    ============================================================ */
 /* Klassenarbeit und Test teilen dieselbe Maschinerie (Aufgaben, Bewertungsbogen,
    Statistik). Unterschied ist allein der Bereich: die Klassenarbeit zählt
-   schriftlich, der Test mündlich. `kaKind` liefert daraus die Beschriftungen. */
+   schriftlich, der Test mündlich oder in einer eigenen Kategorie.
+   `kaKind` liefert daraus die Beschriftungen. */
 function kaKind(col) {
-  return col && col.type === 'muendlich'
+  return col && col.type !== 'schriftlich'
     ? { key: 'test', name: 'Test', pill: 'Test' }
     : { key: 'ka', name: 'Klassenarbeit', pill: 'KA' };
 }
@@ -1794,9 +1935,9 @@ function kaPill(col) {
 }
 function createKA(c, type) {
   const hy = c.halfYears[route.hy];
-  type = type === 'muendlich' ? 'muendlich' : 'schriftlich';
+  type = type || 'schriftlich';
   const col = {
-    id: uid(), type, label: type === 'muendlich' ? 'Test' : 'Klassenarbeit', date: todayISO(),
+    id: uid(), type, label: type === 'schriftlich' ? 'Klassenarbeit' : 'Test', date: todayISO(),
     ka: {
       tasks: [
         { id: uid(), label: 'Aufgabe 1', max: 10 },
@@ -1823,7 +1964,7 @@ function renderKA() {
     <div class="page-head">
       <div>
         <h1>${esc(col.label)}</h1>
-        <div class="sub">${kind.name} · ${esc(c.subject)} ${esc(c.className)} · ${route.hy}. Halbjahr${col.date?' · '+fmtDateLong(col.date):''} · zählt ${col.type==='muendlich'?'mündlich':'schriftlich'}</div>
+        <div class="sub">${kind.name} · ${esc(c.subject)} ${esc(c.className)} · ${route.hy}. Halbjahr${col.date?' · '+fmtDateLong(col.date):''} · ${esc(catCountsText(col.type))}</div>
       </div>
       <button class="btn small danger" id="kaDeleteTop">${kind.name} löschen</button>
     </div>
@@ -1850,9 +1991,9 @@ function renderKaEingabe(c, col) {
     return;
   }
   const maxTotal = col.ka.tasks.reduce((a, t) => a + (Number(t.max) || 0), 0);
-  const grp = col.type === 'muendlich' ? 'grp-muend' : 'grp-schrift';
+  const grp = `class="${catGrpClass(col.type)}" style="${catGrpStyle(col.type)}"`;
   const head = col.ka.tasks.map(t =>
-    `<th class="ka-task ${grp}">${esc(t.label)}<span class="ch-max">von ${t.max}</span></th>`).join('');
+    `<th class="ka-task ${catGrpClass(col.type)}" style="${catGrpStyle(col.type)}">${esc(t.label)}<span class="ch-max">von ${t.max}</span></th>`).join('');
 
   const rows = c.students.map(s => {
     const pts = (data.kaPoints[s.id] || {})[col.id] || {};
@@ -1870,10 +2011,10 @@ function renderKaEingabe(c, col) {
   }).join('');
 
   body.innerHTML = `
-    <div class="notice">Punkte pro Aufgabe eintragen. Note, Prozent und Summe berechnen sich automatisch und landen als <b>${col.type==='muendlich'?'mündliche':'schriftliche'}</b> Note in der Notentabelle. Leere Zeile = nicht mitgeschrieben.</div>
+    <div class="notice">Punkte pro Aufgabe eintragen. Note, Prozent und Summe berechnen sich automatisch und landen als ${isStdCat(col.type) ? `<b>${catDef(col.type).adj}e</b> Note` : `Note in <b>„${esc(catName(col.type))}“</b>`} in der Notentabelle. Leere Zeile = nicht mitgeschrieben.</div>
     <div class="table-wrap"><table class="grades">
       <thead><tr><th class="col-name">Schüler:in</th>${head}
-        <th class="${grp}">Summe</th><th class="${grp}">Prozent</th><th class="grp-final">Note</th></tr></thead>
+        <th ${grp}>Summe</th><th ${grp}>Prozent</th><th class="grp-final">Note</th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
   `;
@@ -1945,10 +2086,7 @@ function renderKaBewertung(c, col) {
         <div class="field"><label>Bezeichnung</label><input type="text" id="kaLabel" value="${esc(col.label)}"></div>
         <div class="field"><label>Datum</label><input type="date" id="kaDate" value="${col.date||''}"></div>
         <div class="field"><label>Zählt als</label>
-          <div class="seg" id="kaType" style="width:100%">
-            <button type="button" data-t="schriftlich" style="flex:1" class="${col.type!=='muendlich'?'active':''}">Schriftlich (Klassenarbeit)</button>
-            <button type="button" data-t="muendlich" style="flex:1" class="${col.type==='muendlich'?'active':''}">Mündlich (Test)</button>
-          </div>
+          ${catPickerHtml(c, 'kaType', col.type, { labels: { schriftlich: 'Schriftlich (Klassenarbeit)', muendlich: 'Mündlich (Test)' } })}
           <div class="hint">Bestimmt, in welchen Notenbereich das Ergebnis einfließt. Punkte und Bewertungsbogen bleiben erhalten.</div>
         </div>
         <div class="field"><label>Gewichtung</label>
@@ -2001,24 +2139,18 @@ function renderKaBewertung(c, col) {
 
   document.getElementById('kaLabel').oninput = e => { col.label = e.target.value; save(); };
   document.getElementById('kaDate').onchange = e => { col.date = e.target.value; save(); };
-  body.querySelectorAll('#kaType button').forEach(b => b.onclick = () => {
-    if (col.type === b.dataset.t) return;
-    col.type = b.dataset.t;
+  bindCatPicker('kaType', v => {
+    if (col.type === v) return;
+    col.type = v;
     save(); renderKA();
-    toast(`Zählt jetzt ${col.type === 'muendlich' ? 'mündlich' : 'schriftlich'}.`);
+    toast(`${catCountsText(col.type).replace(/^zählt/, 'Zählt jetzt')}.`);
   });
 
   /* Gewichtung — gespeichert wird nur, was vom Standard (einfach) abweicht. */
   let wPick = wMode;
   const pctHint = () => {
     const el = document.getElementById('kaPctHint'); if (!el) return;
-    const b = col.type === 'schriftlich' ? c.weightWritten : c.weightOral;
-    const lbl = col.type === 'schriftlich' ? 'schriftlich' : 'mündlich';
-    const p = clamp(parseFloat(val('kaPct').replace(',', '.')) || 0, 0, 100);
-    const restText = p > 0 && p < b
-      ? ` Die übrigen ${lbl}en Noten teilen sich dann noch ${fmtNum(b - p)} %.`
-      : (p >= b ? ` Das ist bereits der ganze ${lbl}e Anteil — die übrigen ${lbl}en Noten zählen dann nicht mehr.` : '');
-    el.textContent = `Anteil an der Gesamtnote. ${lbl.charAt(0).toUpperCase() + lbl.slice(1)} zählt insgesamt ${fmtNum(b)} %.${restText}`;
+    el.textContent = fixedPctHint(c, col.type, clamp(parseFloat(val('kaPct').replace(',', '.')) || 0, 0, 100));
   };
   const applyWeight = () => {
     delete col.factor; delete col.pct;
@@ -2177,92 +2309,20 @@ function renderTable(c) {
   const scale = c.scale || 'punkte';
   const isSimpel = route.view === 'simpel';
   const isGesamt = route.view === 'gesamt';
-  const showS = isGesamt || route.view === 'schriftlich';
-  const showM = isGesamt || route.view === 'muendlich';
-  const schriftCols = hy.columns.filter(x => x.type === 'schriftlich');
-  const muendCols = hy.columns.filter(x => x.type === 'muendlich');
-  const sonstS = hy.sonstige.filter(s => s.scope === 'schriftlich');
-  const sonstM = hy.sonstige.filter(s => s.scope === 'muendlich');
-  const sonstA = hy.sonstige.filter(s => s.scope === 'allgemein');
+  const cats = courseCats(c);
+  const viewCat = cats.find(k => k.id === route.view) || null;   // Ansicht einer einzelnen Kategorie
+  const colsOf = id => hy.columns.filter(x => x.type === id);
+  const sonstOf = scope => hy.sonstige.filter(x => x.scope === scope);
   const zwCols = hy.columns.filter(x => x.type === 'zwischenstand');
+  const zwOf = id => zwCols.filter(x => (x.source || 'gesamt') === id);
   const showHA = (c.haLog || []).length > 0;
 
   // Invertierte Listen-Ansicht: Gesamt/Ø/Neuestes zuerst links
   const inverted = data.meta.tableLayout === 'invers';
-  const byNewest = (a, b) => (b.date || '').localeCompare(a.date || '');
-  const schriftInv = schriftCols.slice().sort(byNewest);
-  const muendInv = muendCols.slice().sort(byNewest);
-  const allSonst = hy.sonstige.slice();
-
-  /* Kopf in drei Zeilen: Name · Art und Eigenschaften (Plaketten) · Datum */
-  const headCols = (cols, grpClass) => cols.map(col => {
-    const tags = (kaPill(col) + rasterPill(col) + weightPill(col)).trim();
-    return `
-    <th class="colhead ${grpClass}" data-col="${col.id}">
-      <span class="ch-label">${esc(col.label)}</span>
-      ${tags ? `<span class="ch-tags">${tags}</span>` : ''}
-      ${col.date ? `<span class="ch-date">${fmtDate(col.date)}</span>` : ''}
-    </th>`;
-  }).join('');
-  const headSonst = list => list.map(so => `<th class="grp-sonst">${esc(so.label)}<span class="ch-date">${so.percent}%</span></th>`).join('');
-
-  const stickyGesamt = isGesamt && route.hy !== '2';   // Standard: Gesamt ist letzte Spalte (HJ1)
-  const zwMCols = zwCols.filter(x => x.source === 'muendlich');
-  const zwHeadOf = cols => cols.map(col => `<th class="grp-prev zw-head" data-zw="${col.id}">${esc(col.label||'Zwischenstand')}${col.source==='muendlich'?'<span class="ch-tags"><span class="pill">mündl.</span></span>':''}<span class="ch-date">${fmtDate(col.date)}</span></th>`).join('');
-  const zwHead = zwHeadOf(zwCols);
-  // Invertiert reihen sich Zwischenstände nach Datum in die mündlichen Spalten ein (bei gleichem Datum vor den Noten)
   const isZw = col => col.type === 'zwischenstand';
-  const byNewestZw = (a, b) => byNewest(a, b) || isZw(b) - isZw(a);
-  const muendZwInv = muendCols.concat(zwCols).sort(byNewestZw);
-  const muendZwMInv = muendCols.concat(zwMCols).sort(byNewestZw);
-  const headMixed = cols => cols.map(col => isZw(col) ? zwHeadOf([col]) : headCols([col], 'grp-muend')).join('');
-  const haHead = `<th class="grp-ha ha-head" title="Hausaufgaben: gemacht / fehlt">HA / Fehlt</th>`;
-
-  let thead = `<tr><th class="col-name">Schüler:in</th>`;
-  if (isSimpel) {
-    if (inverted) {
-      thead += `<th class="grp-final sep-final">Gesamt</th>`;
-      thead += `<th class="grp-muend">Ø mündl.</th>`;
-      thead += headCols(muendInv.slice(0, 2), 'grp-muend');
-      thead += `<th class="grp-schrift">Ø schr.</th>`;
-      thead += headCols(schriftInv.slice(0, 1), 'grp-schrift');
-    } else {
-      thead += headCols(schriftCols.slice(-1), 'grp-schrift');
-      thead += `<th class="grp-schrift">Ø schr.</th>`;
-      thead += headCols(muendCols.slice(-2), 'grp-muend');
-      thead += `<th class="grp-muend">Ø mündl.</th>`;
-      thead += `<th class="grp-final sep-final col-sticky-r">Gesamt</th>`;
-    }
-  } else if (inverted && isGesamt) {
-    if (route.hy === '2') thead += `<th class="grp-final sep-final">Endjahr</th>`;
-    thead += `<th class="grp-final sep-final">Gesamt</th>`;
-    if (showHA) thead += haHead;
-    thead += headSonst(allSonst);
-    thead += `<th class="grp-schrift">Ø schr.</th>`;
-    thead += headCols(schriftInv, 'grp-schrift');
-    thead += `<th class="grp-muend">Ø mündl.</th>`;
-    thead += headMixed(muendZwInv);
-  } else if (inverted && showS) {   // invertierter Schriftlich-Tab
-    thead += headSonst(sonstS);
-    thead += `<th class="grp-schrift">Ø schr.</th>`;
-    thead += headCols(schriftInv, 'grp-schrift');
-  } else if (inverted && showM) {   // invertierter Mündlich-Tab
-    thead += headSonst(sonstM);
-    thead += `<th class="grp-muend">Ø mündl.</th>`;
-    thead += headMixed(muendZwMInv);
-  } else {
-    if (route.hy === '2') thead += `<th class="grp-prev">Ges. HJ1</th>`;
-    if (showS) { thead += headCols(schriftCols, 'grp-schrift'); thead += `<th class="grp-schrift">Ø schr.</th>`; thead += headSonst(sonstS); }
-    if (showM) { thead += headCols(muendCols, 'grp-muend'); thead += `<th class="grp-muend">Ø mündl.</th>`; thead += headSonst(sonstM); if (!isGesamt) thead += zwHeadOf(zwMCols); }
-    if (isGesamt) {
-      thead += headSonst(sonstA);
-      if (showHA) thead += haHead;
-      thead += zwHead;
-      thead += `<th class="grp-final sep-final ${stickyGesamt?'col-sticky-r':''}">Gesamt</th>`;
-      if (route.hy === '2') thead += `<th class="grp-final sep-final col-sticky-r">Endjahr</th>`;
-    }
-  }
-  thead += `</tr>`;
+  const byNewest = (a, b) => (b.date || '').localeCompare(a.date || '');
+  const byNewestZw = (a, b) => byNewest(a, b) || isZw(b) - isZw(a);   // gleiches Datum: Zwischenstand vor den Noten
+  const newest = cols => cols.slice().sort(byNewestZw);
 
   // Einzelnoten: nur farbige Schrift, kein Hintergrund
   const cell = (pts) => {
@@ -2282,73 +2342,111 @@ function renderTable(c) {
       ${scale==='noten'?'':`<span class="nt" style="color:${col.fg}">${v==null?'':noteLabel(v)}</span>`}
       ${manual?`<span class="calc" style="color:${col.fg}">(${fmtGrade(eff.computed, scale, true)})</span>`:''}</div>`;
   };
+  const zwTd = (s, col) => {
+    const avg = (col.fmt || 'dezimal') === 'dezimal';
+    const orig = (col.values || {})[s.id], over = (col.overrides || {})[s.id];
+    const adj = over != null;
+    const shown = adj ? over : orig;
+    return `<td class="prev-cell zw-cell" data-s="${s.id}" data-zw="${col.id}"><div class="cell ${adj?'manual':''}">
+      <span class="pt">${fmtGrade(shown, scale, avg)}</span>
+      ${adj && orig != null ? `<span class="calc">(${fmtGrade(orig, scale, avg)})</span>` : ''}</div></td>`;
+  };
+
+  /* Spalten der Ansicht als Liste: je Eintrag Kopf und Zelle.
+     x enthält je Schüler:in die vorab berechneten Werte. */
+  const D = [];
+  /* Kopf in drei Zeilen: Name · Art und Eigenschaften (Plaketten) · Datum */
+  const pushCol = (col, catId) => {
+    const tags = (kaPill(col) + rasterPill(col) + weightPill(col)).trim();
+    D.push({
+      head: `<th class="colhead ${catGrpClass(catId)}" style="${catGrpStyle(catId)}" data-col="${col.id}">
+        <span class="ch-label">${esc(col.label)}</span>
+        ${tags ? `<span class="ch-tags">${tags}</span>` : ''}
+        ${col.date ? `<span class="ch-date">${fmtDate(col.date)}</span>` : ''}
+      </th>`,
+      td: (s, x) => `<td class="grade-cell" data-s="${s.id}" data-col="${col.id}">${cell(x.gr[col.id])}</td>`,
+    });
+  };
+  const pushZw = col => {
+    const src = col.source || 'gesamt';
+    D.push({
+      head: `<th class="grp-prev zw-head" data-zw="${col.id}">${esc(col.label||'Zwischenstand')}${src !== 'gesamt' ? `<span class="ch-tags"><span class="pill">${esc(catDef(src).short)}</span></span>` : ''}<span class="ch-date">${fmtDate(col.date)}</span></th>`,
+      td: s => zwTd(s, col),
+    });
+  };
+  const pushMixed = (cols, catId) => cols.forEach(col => isZw(col) ? pushZw(col) : pushCol(col, catId));
+  const pushAvg = id => D.push({
+    head: `<th ${catGrpAttr(id)}>Ø ${esc(catDef(id).short)}</th>`,
+    td: (s, x) => `<td class="avg">${avgCell(x.avg(id))}</td>`,
+  });
+  const pushSonst = list => list.forEach(so => D.push({
+    head: `<th class="grp-sonst">${esc(so.label)}<span class="ch-date">${so.percent}%</span></th>`,
+    td: s => sonstCell(s.id, so.id),
+  }));
+  const pushHA = () => { if (showHA) D.push({
+    head: `<th class="grp-ha ha-head" title="Hausaufgaben: gemacht / fehlt">HA / Fehlt</th>`,
+    td: s => { const hc = haCounts(c, s.id); return `<td class="ha-cell"><div class="cell">${hc.gemacht} <span style="color:${hc.nicht?'var(--g-fail)':'var(--ink-faint)'}">/ ${hc.nicht}</span></div></td>`; },
+  }); };
+  const pushGesamt = sticky => D.push({
+    head: `<th class="grp-final sep-final ${sticky?'col-sticky-r':''}">Gesamt</th>`,
+    td: s => `<td class="final sep-final ${sticky?'col-sticky-r':''}" data-final="gesamt" data-s="${s.id}">${finalCell(effGesamt(c, route.hy, s.id), trendArrowSvg(trendDir(c, route.hy, s.id)))}</td>`,
+  });
+  const pushEnd = sticky => { if (route.hy === '2') D.push({
+    head: `<th class="grp-final sep-final ${sticky?'col-sticky-r':''}">Endjahr</th>`,
+    td: s => `<td class="final sep-final ${sticky?'col-sticky-r':''}" data-final="endjahr" data-s="${s.id}">${finalCell(effEndjahr(c, s.id))}</td>`,
+  }); };
+  const pushPrev = () => { if (route.hy === '2') D.push({
+    head: `<th class="grp-prev">Ges. HJ1</th>`,
+    td: s => `<td class="prev-cell"><div class="cell">${fmtGrade(effGesamt(c, '1', s.id).value, scale, true)}</div></td>`,
+  }); };
+
+  if (isSimpel) {
+    /* Simpel: je Kategorie die neuesten Noten (mündlich zwei, sonst eine) und der Schnitt */
+    const n = id => id === 'muendlich' ? 2 : 1;
+    if (inverted) {
+      pushGesamt(false);
+      const order = ['muendlich', 'schriftlich'].concat(cats.filter(k => !k.std).map(k => k.id));
+      order.forEach(id => { pushAvg(id); newest(colsOf(id)).slice(0, n(id)).forEach(col => pushCol(col, id)); });
+    } else {
+      cats.forEach(k => { colsOf(k.id).slice(-n(k.id)).forEach(col => pushCol(col, k.id)); pushAvg(k.id); });
+      pushGesamt(true);
+    }
+  } else if (isGesamt && inverted) {
+    pushEnd(false);
+    pushGesamt(false);
+    pushHA();
+    pushSonst(hy.sonstige.slice());
+    /* Zwischenstände reihen sich nach Datum in die mündlichen Spalten ein */
+    cats.forEach(k => { pushAvg(k.id); pushMixed(newest(k.id === 'muendlich' ? colsOf(k.id).concat(zwCols) : colsOf(k.id)), k.id); });
+  } else if (isGesamt) {
+    pushPrev();
+    cats.forEach(k => { colsOf(k.id).forEach(col => pushCol(col, k.id)); pushAvg(k.id); pushSonst(sonstOf(k.id)); });
+    pushSonst(sonstOf('allgemein'));
+    pushHA();
+    zwCols.forEach(pushZw);
+    pushGesamt(route.hy !== '2');   // Standard: Gesamt ist letzte Spalte (HJ1)
+    pushEnd(true);
+  } else if (viewCat && inverted) {
+    pushSonst(sonstOf(viewCat.id));
+    pushAvg(viewCat.id);
+    pushMixed(newest(colsOf(viewCat.id).concat(zwOf(viewCat.id))), viewCat.id);
+  } else if (viewCat) {
+    pushPrev();
+    colsOf(viewCat.id).forEach(col => pushCol(col, viewCat.id));
+    pushAvg(viewCat.id);
+    pushSonst(sonstOf(viewCat.id));
+    zwOf(viewCat.id).forEach(pushZw);
+  }
+
+  const thead = `<tr><th class="col-name">Schüler:in</th>${D.map(d => d.head).join('')}</tr>`;
 
   const rows = c.students.map(s => {
-    const gr = data.grades[s.id] || {};
     const comp = computeHalf(c, route.hy, s.id);
+    const x = { gr: data.grades[s.id] || {}, avg: id => { const b = comp.cats.find(k => k.id === id); return b ? b.avg : null; } };
     const sparkVals = gradeSeries(c, s.id, [route.hy], 'muendlich').map(p => p.value);
     const spark = sparkVals.length >= 2 ? `<div class="spark">${sparkSvg(sparkVals)}</div>` : '';
     const blind = blindSpot(c, route.hy, s.id) ? '<span class="blind-dot" title="keine aktuelle mündliche Note"></span>' : '';
-    const gradeTd = col => `<td class="grade-cell" data-s="${s.id}" data-col="${col.id}">${cell(gr[col.id])}</td>`;
-    const haTd = () => { const hc = haCounts(c, s.id); return `<td class="ha-cell"><div class="cell">${hc.gemacht} <span style="color:${hc.nicht?'var(--g-fail)':'var(--ink-faint)'}">/ ${hc.nicht}</span></div></td>`; };
-    const zwTd = col => {
-      const avg = (col.fmt || 'dezimal') === 'dezimal';
-      const orig = (col.values || {})[s.id], over = (col.overrides || {})[s.id];
-      const adj = over != null;
-      const shown = adj ? over : orig;
-      return `<td class="prev-cell zw-cell" data-s="${s.id}" data-zw="${col.id}"><div class="cell ${adj?'manual':''}">
-        <span class="pt">${fmtGrade(shown, scale, avg)}</span>
-        ${adj && orig != null ? `<span class="calc">(${fmtGrade(orig, scale, avg)})</span>` : ''}</div></td>`;
-    };
-    let tr = `<tr class="${studentActive(s)?'':'inactive'}"><td class="col-name"><span class="sname sname-link" data-student="${s.id}">${esc(s.firstName)} ${esc(s.lastName||'')}${blind}${s.exit?' <small>(aus)</small>':''}${infoBadge(s)}</span>${spark}</td>`;
-    if (isSimpel) {
-      if (inverted) {
-        tr += `<td class="final sep-final" data-final="gesamt" data-s="${s.id}">${finalCell(effGesamt(c, route.hy, s.id), trendArrowSvg(trendDir(c, route.hy, s.id)))}</td>`;
-        tr += `<td class="avg">${avgCell(comp.mAvg)}</td>`;
-        muendInv.slice(0, 2).forEach(col => tr += gradeTd(col));
-        tr += `<td class="avg">${avgCell(comp.wAvg)}</td>`;
-        schriftInv.slice(0, 1).forEach(col => tr += gradeTd(col));
-      } else {
-        schriftCols.slice(-1).forEach(col => tr += gradeTd(col));
-        tr += `<td class="avg">${avgCell(comp.wAvg)}</td>`;
-        muendCols.slice(-2).forEach(col => tr += gradeTd(col));
-        tr += `<td class="avg">${avgCell(comp.mAvg)}</td>`;
-        tr += `<td class="final sep-final col-sticky-r" data-final="gesamt" data-s="${s.id}">${finalCell(effGesamt(c, route.hy, s.id), trendArrowSvg(trendDir(c, route.hy, s.id)))}</td>`;
-      }
-    } else if (inverted && isGesamt) {
-      if (route.hy === '2') tr += `<td class="final sep-final" data-final="endjahr" data-s="${s.id}">${finalCell(effEndjahr(c, s.id))}</td>`;
-      tr += `<td class="final sep-final" data-final="gesamt" data-s="${s.id}">${finalCell(effGesamt(c, route.hy, s.id), trendArrowSvg(trendDir(c, route.hy, s.id)))}</td>`;
-      if (showHA) tr += haTd();
-      allSonst.forEach(so => tr += sonstCell(s.id, so.id));
-      tr += `<td class="avg">${avgCell(comp.wAvg)}</td>`;
-      schriftInv.forEach(col => tr += gradeTd(col));
-      tr += `<td class="avg">${avgCell(comp.mAvg)}</td>`;
-      muendZwInv.forEach(col => tr += isZw(col) ? zwTd(col) : gradeTd(col));
-    } else if (inverted && showS) {
-      sonstS.forEach(so => tr += sonstCell(s.id, so.id));
-      tr += `<td class="avg">${avgCell(comp.wAvg)}</td>`;
-      schriftInv.forEach(col => tr += gradeTd(col));
-    } else if (inverted && showM) {
-      sonstM.forEach(so => tr += sonstCell(s.id, so.id));
-      tr += `<td class="avg">${avgCell(comp.mAvg)}</td>`;
-      muendZwMInv.forEach(col => tr += isZw(col) ? zwTd(col) : gradeTd(col));
-    } else {
-      if (route.hy === '2') {
-        const g1 = effGesamt(c, '1', s.id).value;
-        tr += `<td class="prev-cell"><div class="cell">${fmtGrade(g1, scale, true)}</div></td>`;
-      }
-      if (showS) { schriftCols.forEach(col => tr += gradeTd(col)); tr += `<td class="avg">${avgCell(comp.wAvg)}</td>`; sonstS.forEach(so => tr += sonstCell(s.id, so.id)); }
-      if (showM) { muendCols.forEach(col => tr += gradeTd(col)); tr += `<td class="avg">${avgCell(comp.mAvg)}</td>`; sonstM.forEach(so => tr += sonstCell(s.id, so.id)); if (!isGesamt) zwMCols.forEach(col => tr += zwTd(col)); }
-      if (isGesamt) {
-        sonstA.forEach(so => tr += sonstCell(s.id, so.id));
-        if (showHA) tr += haTd();
-        zwCols.forEach(col => tr += zwTd(col));
-        tr += `<td class="final sep-final ${stickyGesamt?'col-sticky-r':''}" data-final="gesamt" data-s="${s.id}">${finalCell(effGesamt(c, route.hy, s.id), trendArrowSvg(trendDir(c, route.hy, s.id)))}</td>`;
-        if (route.hy === '2') tr += `<td class="final sep-final col-sticky-r" data-final="endjahr" data-s="${s.id}">${finalCell(effEndjahr(c, s.id))}</td>`;
-      }
-    }
-    tr += `</tr>`;
-    return tr;
+    return `<tr class="${studentActive(s)?'':'inactive'}"><td class="col-name"><span class="sname sname-link" data-student="${s.id}">${esc(s.firstName)} ${esc(s.lastName||'')}${blind}${s.exit?' <small>(aus)</small>':''}${infoBadge(s)}</span>${spark}</td>${D.map(d => d.td(s, x)).join('')}</tr>`;
   }).join('');
 
   const blindCount = c.students.filter(s => studentActive(s) && blindSpot(c, route.hy, s.id)).length;
@@ -2470,28 +2568,24 @@ function openCalcGesamt(c, s, name) {
     return `<div class="cs-line cs-sub"><span>Bonus: ${esc(so.label)} (${so.percent}%, Pkt ${sv??'–'})</span><span class="cs-vals">${sv!=null&&base!=null&&sv>base?'wirkt':'—'}</span></div>`;
   }).join('');
 
+  const cats = courseCats(c);
+  const baseList = () => cats.map(k => ({ id: k.id, weight: k.weight }));
+  const wl = cats.map(k => ({ id: k.id, weight: wt.map[k.id] || 0 }));
+  const blockHtml = b => `<div class="calc-block" style="${isStdCat(b.id) ? '' : `border-left:4px solid ${b.cat.color}`}">
+        <h3>${esc(b.cat.name)}<span class="cs-sub"> · ${b.counts ? `zählt ${fmtNum(b.pct)} %` : b.weight > 0 ? 'noch keine Note' : 'zählt nicht (0 %)'}</span></h3>
+        ${listCols(hy.columns.filter(x => x.type === b.id), b.parts)}
+        ${listSonst(b.id, b.raw)}
+        <div class="cs-line"><span>Ø ${esc(b.cat.std ? b.cat.adj : b.cat.name)}</span><span class="cs-vals">${fmtGrade(b.avg, scale, true)}</span></div>
+      </div>`;
+
   modal(`Berechnung — ${name}`, `
     <div class="calc-sheet">
-      <div class="calc-block">
-        <h3>Schriftlich</h3>
-        ${listCols(hy.columns.filter(x=>x.type==='schriftlich'), comp.wParts)}
-        ${listSonst('schriftlich', comp.wRaw)}
-        <div class="cs-line"><span>Ø schriftlich</span><span class="cs-vals">${fmtGrade(comp.wAvg, scale, true)}</span></div>
-      </div>
-      <div class="calc-block">
-        <h3>Mündlich</h3>
-        ${listCols(hy.columns.filter(x=>x.type==='muendlich'), comp.mParts)}
-        ${listSonst('muendlich', comp.mRaw)}
-        <div class="cs-line"><span>Ø mündlich</span><span class="cs-vals">${fmtGrade(comp.mAvg, scale, true)}</span></div>
-      </div>
+      ${comp.cats.map(blockHtml).join('')}
 
       <div class="field">
         <label>Gewichtung für ${name}${wt.custom?' (individuell)':''}</label>
-        <div class="row2">
-          <div><input id="cwW" type="number" min="0" max="100" value="${wt.w}"> <span class="hint">% schriftlich</span></div>
-          <div><input id="cwM" type="number" min="0" max="100" value="${wt.m}" disabled> <span class="hint">% mündlich</span></div>
-        </div>
-        ${wt.custom?`<button class="btn small" id="cwReset" style="margin-top:8px">Auf Kurs-Standard (${c.weightWritten}/${c.weightOral}) zurück</button>`:`<div class="hint">Standard aus Kurs: ${c.weightWritten}/${c.weightOral}. Änderung gilt nur für ${name}.</div>`}
+        <div id="cwRows"></div>
+        ${wt.custom?`<button class="btn small" id="cwReset" style="margin-top:8px">Auf Kurs-Standard (${esc(weightSummary(c))}) zurück</button>`:`<div class="hint">Standard aus Kurs: ${esc(weightSummary(c))}. Änderung gilt nur für ${name}.</div>`}
       </div>
 
       ${listSonst('allgemein', comp.gesamt)}
@@ -2506,12 +2600,14 @@ function openCalcGesamt(c, s, name) {
   `, [
     { label: 'Abbrechen', onClick: closeModal },
     { label: 'Speichern', cls: 'primary', onClick: () => {
+      if (Math.abs(rows.total() - 100) > 1e-9) return toast(`Die Gewichte ergeben ${fmtNum(rows.total())} % — bitte auf 100 % bringen.`);
       const manKey = hyKey === '1' ? 'g1' : 'g2';
       const snap = beginChange([['weightOverride', s.id, hyKey], ['manual', s.id, manKey]]);
-      const w = clamp(parseInt(val('cwW')) || 0, 0, 100);
       if (!data.weightOverride[s.id]) data.weightOverride[s.id] = {};
-      if (w === c.weightWritten) delete data.weightOverride[s.id][hyKey];
-      else data.weightOverride[s.id][hyKey] = w;
+      /* nur speichern, was vom Kurs abweicht */
+      const same = wl.every(x => Math.abs(x.weight - (cats.find(k => k.id === x.id).weight || 0)) < 1e-9);
+      if (same) delete data.weightOverride[s.id][hyKey];
+      else { const ov = {}; wl.forEach(x => ov[x.id] = x.weight); data.weightOverride[s.id][hyKey] = ov; }
       if (!data.manual[s.id]) data.manual[s.id] = {};
       const mv = val('cManual');
       if (mv === '') delete data.manual[s.id][manKey];
@@ -2522,10 +2618,9 @@ function openCalcGesamt(c, s, name) {
       save(); closeModal(); render();
     }},
   ]);
-  const cw = document.getElementById('cwW'), cm = document.getElementById('cwM');
-  cw.oninput = () => { cm.value = clamp(100 - (parseInt(cw.value) || 0), 0, 100); };
+  const rows = catWeightRows(document.getElementById('cwRows'), wl);
   const rst = document.getElementById('cwReset');
-  if (rst) rst.onclick = () => { cw.value = c.weightWritten; cm.value = c.weightOral; };
+  if (rst) rst.onclick = () => { wl.splice(0, wl.length, ...baseList()); rows.redraw(); };
 }
 
 function openCalcEndjahr(c, s, name) {
@@ -2574,7 +2669,7 @@ function openCalcEndjahr(c, s, name) {
 }
 
 /* ---------- Simulator „Was brauche ich noch?" ----------
-   Modell: mündliche Leistung bleibt konstant, variabel ist die nächste
+   Modell: alle übrigen Leistungen bleiben konstant, variabel ist die nächste
    schriftliche Note. Standard-Szenarien für die Notengrenzen 13/10/07/04. */
 function simNeed(c, hyKey, sId, target) {
   const cur = simulateGesamt(c, hyKey, sId, null);
@@ -2594,7 +2689,7 @@ function openSimulator(c, sId) {
     <div class="field"><label>Halbjahr</label>
       <select id="simHy"><option value="1">1. Halbjahr</option><option value="2" ${route.hy==='2'?'selected':''}>2. Halbjahr</option></select></div>
     <div class="calc-block" style="margin-top:4px">
-      <h3>Erreichbar bei gleichbleibender mündlicher Leistung</h3>
+      <h3>Erreichbar bei gleichbleibender ${courseCats(c).length > 2 ? 'übriger' : 'mündlicher'} Leistung</h3>
       <div class="cs-sub" id="simCur" style="margin-bottom:6px"></div>
       <div id="simScenarios"></div>
     </div>
@@ -3038,7 +3133,7 @@ function startDurchtippen(c) {
 function openColumnMenu(c, colId) {
   const col = c.halfYears[route.hy].columns.find(x => x.id === colId);
   if (!col) return;
-  const typLbl = col.type === 'schriftlich' ? 'schriftlich' : 'mündlich';
+  const typLbl = isStdCat(col.type) ? catDef(col.type).adj : esc(catName(col.type));
   modal(esc(col.label), `
     <div class="cs-sub" style="margin-bottom:10px">${typLbl}${col.date ? ' · ' + fmtDateLong(col.date) : ''}${colWeighted(col) ? ' · ' + esc(weightTitle(col)) : ''}</div>
     <div class="chip-list">
@@ -3075,7 +3170,7 @@ function openDurchtippen(c, colId, idx) {
   const scale = c.scale;
   const cur = (data.grades[s.id] || {})[colId];
   const info = muendlichInfo(c, route.hy, s.id, colId, col.type);
-  const avgLbl = col.type === 'schriftlich' ? 'Ø schriftlich' : 'Ø mündlich';
+  const avgLbl = `Ø ${isStdCat(col.type) ? catDef(col.type).adj : esc(catName(col.type))}`;
   const trendTxt = info.trend === 'up' ? `steigend ${trendArrowSvg('up')}` : info.trend === 'down' ? `fallend ${trendArrowSvg('down')}` : info.trend === 'flat' ? 'gleichbleibend' : '—';
   let pad = '';
   for (let p = 15; p >= 0; p--) {
@@ -3106,15 +3201,82 @@ function openAddMenu(c) {
   modal('Leistung hinzufügen', `<div class="chip-list">
     ${item('amMuend', 'Mündliche Note', 'Einzelne Note, z. B. Mitarbeit, Referat')}
     ${item('amSchrift', 'Schriftliche Note', 'Einzelne Note ohne Aufgaben')}
+    ${item('amCat', 'Kategorie-Note', customCats().length ? 'Note in einer eigenen Kategorie, z. B. ' + esc(customCats().slice(0, 2).map(k => k.name).join(', ')) : 'Note in einer eigenen Kategorie, z. B. Praxis, Portfolio')}
     ${item('amKA', 'Klassenarbeit', 'Aufgaben, Punkte und Bewertungsbogen · zählt schriftlich')}
     ${item('amTest', 'Test', 'Wie eine Klassenarbeit, zählt aber mündlich')}
     ${item('amRaster', 'Bewertungsraster', 'Einschätzung nach Kriterien, schlägt eine Note vor')}
   </div>`, [{ label: 'Abbrechen', onClick: closeModal }]);
   document.getElementById('amMuend').onclick = () => openColumnForm(c, 'muendlich');
   document.getElementById('amSchrift').onclick = () => openColumnForm(c, 'schriftlich');
+  document.getElementById('amCat').onclick = () => openCatNotePicker(c);
   document.getElementById('amKA').onclick = () => { closeModal(); createKA(c, 'schriftlich'); };
   document.getElementById('amTest').onclick = () => { closeModal(); createKA(c, 'muendlich'); };
   document.getElementById('amRaster').onclick = () => createRasterRound(c);
+}
+
+/* „Kategorie-Note": eigene Kategorie wählen (oder anlegen), dann die Note anlegen.
+   Eine Kategorie, die der Kurs noch nicht führt, kommt mit 0 % hinzu. */
+function openCatNotePicker(c) {
+  const inCourse = courseCats(c).filter(k => !k.std);
+  const others = customCats().filter(k => !inCourse.some(x => x.id === k.id));
+  const row = (k, sub) => `<button class="btn menu-btn" data-cat="${esc(k.id)}"><span><i class="cat-dot" style="background:${k.color}"></i>${esc(k.name)}</span><small>${sub}</small></button>`;
+  modal('Kategorie-Note', `
+    ${inCourse.length || others.length ? '' : '<div class="notice">Noch keine eigenen Kategorien. Lege hier die erste an — sie steht danach allen Kursen zur Verfügung.</div>'}
+    <div class="chip-list">
+      ${inCourse.map(k => row(k, `zählt in diesem Kurs ${fmtNum(k.weight)} %`)).join('')}
+      ${others.map(k => row(catDef(k.id), 'noch nicht im Kurs — kommt mit 0 % hinzu')).join('')}
+    </div>
+    <div style="margin-top:12px"><button class="btn small" id="cnNew">+ Neue Kategorie</button></div>
+    <div class="hint" style="margin-top:8px">Die Gewichtung stellst du unter <b>Mehr → Kurs bearbeiten</b> ein.</div>`,
+    [{ label: 'Abbrechen', onClick: closeModal }]);
+  const pick = id => {
+    const added = ensureCourseCat(c, id);
+    if (added) { save(); toast(`„${catName(id)}“ im Kurs ergänzt (0 %).`); }
+    openColumnForm(c, id);
+  };
+  document.querySelectorAll('[data-cat]').forEach(b => b.onclick = () => pick(b.dataset.cat));
+  document.getElementById('cnNew').onclick = () => openCategoryForm(null, id => pick(id), () => openCatNotePicker(c));
+}
+/* Kategorie im Kurs führen (mit 0 %), falls noch nicht da. true = neu ergänzt */
+function ensureCourseCat(c, id) {
+  const cats = courseCats(c);
+  if (Array.isArray(c.cats) && c.cats.some(x => x.id === id)) return false;
+  const had = cats.some(k => k.id === id);
+  setCourseCats(c, cats.some(k => k.id === id) ? cats : cats.concat({ id, weight: 0 }));
+  return !had;
+}
+/* Eigene Kategorie anlegen oder umbenennen (gilt für alle Kurse).
+   onDone(id) nach dem Speichern, onCancel beim Abbrechen. */
+function openCategoryForm(id, onDone, onCancel) {
+  const list = customCats();
+  const k = id ? list.find(x => x.id === id) : null;
+  const used = list.map(x => x.color);
+  let color = k ? k.color : (CAT_COLORS.find(x => !used.includes(x)) || CAT_COLORS[list.length % CAT_COLORS.length]);
+  modal(k ? 'Kategorie bearbeiten' : 'Neue Kategorie', `
+    <div class="field"><label>Name</label><input id="ktName" type="text" value="${esc(k ? k.name : '')}" placeholder="z. B. Praxis, Portfolio, Präsentation" maxlength="30"></div>
+    <div class="field"><label>Farbe</label>
+      <div class="cat-colors" id="ktColors">${CAT_COLORS.map(x => `<button type="button" class="cat-color ${x === color ? 'active' : ''}" data-c="${x}" style="background:${x}" aria-label="Farbe ${x}"></button>`).join('')}</div>
+      <div class="hint">Erscheint im Notenverlauf und in den Spaltenköpfen.</div></div>
+    ${k ? '' : '<div class="notice">Die Kategorie steht danach allen Kursen zur Verfügung. Im Kurs zählt sie erst, wenn du ihr unter <b>Kurs bearbeiten</b> ein Gewicht gibst.</div>'}`, [
+    { label: 'Abbrechen', onClick: () => onCancel ? onCancel() : closeModal() },
+    { label: 'Speichern', cls: 'primary', onClick: () => {
+      const name = val('ktName').trim();
+      if (!name) return toast('Bitte einen Namen angeben.');
+      const clash = STD_CATS.concat(list).some(x => x.id !== id && x.name.toLowerCase() === name.toLowerCase());
+      if (clash) return toast('Diesen Namen gibt es schon.');
+      if (!Array.isArray(data.meta.categories)) data.meta.categories = [];
+      let rec = k;
+      if (rec) { rec.name = name; rec.color = color; }
+      else { rec = { id: 'k' + uid(), name, color }; data.meta.categories.push(rec); }
+      save();
+      if (onDone) onDone(rec.id); else closeModal();
+    }},
+  ]);
+  document.querySelectorAll('#ktColors button').forEach(b => b.onclick = () => {
+    color = b.dataset.c;
+    document.querySelectorAll('#ktColors button').forEach(x => x.classList.toggle('active', x === b));
+  });
+  setTimeout(() => { const el = document.getElementById('ktName'); if (el && !k) el.focus(); }, 50);
 }
 
 /* Mehr-Menü */
@@ -3238,36 +3400,97 @@ document.getElementById('navHome').onclick = () => go({ name: 'home' });
 document.getElementById('backFab').onclick = goBack;
 
 /* ---------- Kurs anlegen / bearbeiten ---------- */
-function openCourseForm(course) {
+/* Wie oft wird eine Kategorie in einem Kurs benutzt (Spalten, Bonus, Zwischenstände)? */
+function catUseInCourse(c, id) {
+  let n = 0;
+  ['1', '2'].forEach(h => {
+    const hy = c.halfYears[h];
+    n += hy.columns.filter(col => col.type === id || (col.type === 'zwischenstand' && col.source === id)).length;
+    n += hy.sonstige.filter(so => so.scope === id).length;
+  });
+  return n;
+}
+/* Gewichtungs-Liste für einen neuen Kurs aus den Vorgaben */
+function defaultCatList() {
+  const cw = courseDefaults().catWeights;
+  return STD_CATS.map(k => ({ id: k.id, weight: cw[k.id] || 0 }))
+    .concat(customCats().filter(k => (cw[k.id] || 0) > 0).map(k => ({ id: k.id, weight: cw[k.id] })));
+}
+/* Eingabeliste „Kategorie · %" — geteilt von Kursformular, individueller
+   Gewichtung und Einstellungen. list: [{ id, weight }] wird direkt gepflegt.
+   opts: { removable(id) → bool, onRemove(id), onChange() } */
+function catWeightRows(host, list, opts) {
+  opts = opts || {};
+  const draw = () => {
+    host.innerHTML = list.map(x => {
+      const d = catDef(x.id);
+      const rm = !d.std && opts.removable && opts.removable(x.id);
+      return `<div class="cat-w-row">
+        <span class="cat-w-name"><i class="cat-dot" style="background:${d.color}"></i>${esc(d.name)}</span>
+        <input type="number" min="0" max="100" step="1" inputmode="numeric" data-cw="${esc(x.id)}" value="${fmtNum(x.weight).replace(',', '.')}">
+        <span class="hint">%</span>
+        ${rm ? `<button type="button" class="btn small danger cat-w-rm" data-rm="${esc(x.id)}" aria-label="${esc(d.name)} aus dem Kurs nehmen">×</button>` : '<span class="cat-w-rm"></span>'}
+      </div>`;
+    }).join('') + `<div class="hint cat-w-sum"></div>`;
+    host.querySelectorAll('[data-cw]').forEach(inp => inp.oninput = () => {
+      const x = list.find(y => y.id === inp.dataset.cw);
+      x.weight = clamp(parseFloat(inp.value.replace(',', '.')) || 0, 0, 100);
+      /* bei genau zwei Kategorien ergänzt sich die andere automatisch */
+      if (list.length === 2) {
+        const o = list.find(y => y !== x); o.weight = 100 - x.weight;
+        const oi = host.querySelector(`[data-cw="${CSS.escape(o.id)}"]`); if (oi) oi.value = o.weight;
+      }
+      sum(); if (opts.onChange) opts.onChange();
+    });
+    host.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => {
+      const i = list.findIndex(y => y.id === b.dataset.rm);
+      if (i >= 0) list.splice(i, 1);
+      if (opts.onRemove) opts.onRemove(b.dataset.rm);
+      draw(); if (opts.onChange) opts.onChange();
+    });
+    sum();
+  };
+  const sum = () => {
+    const t = list.reduce((a, x) => a + (Number(x.weight) || 0), 0);
+    const el = host.querySelector('.cat-w-sum');
+    el.innerHTML = Math.abs(t - 100) < 1e-9 ? 'Summe: 100 %' : `<span style="color:var(--amber)">Summe: ${fmtNum(t)} % — bitte auf 100 % bringen.</span>`;
+  };
+  draw();
+  return { redraw: draw, total: () => list.reduce((a, x) => a + (Number(x.weight) || 0), 0) };
+}
+
+function openCourseForm(course, draft) {
   const editing = !!course;
   const cd = courseDefaults();
-  const c = course || { subject: '', className: '', scale: cd.scale, weightWritten: cd.weightWritten, weightOral: 100 - cd.weightWritten, weightHY1: cd.weightHY1, weightHY2: 100 - cd.weightHY1 };
+  const c = course || { subject: '', className: '', scale: cd.scale, weightHY1: cd.weightHY1, weightHY2: 100 - cd.weightHY1 };
+  const d = draft || {};
+  const wl = d.wl || (editing ? courseCats(c).map(k => ({ id: k.id, weight: k.weight })) : defaultCatList());
+  const h1v = d.h1 != null ? d.h1 : c.weightHY1;
+  const pending = () => ({ subject: val('fSubject'), className: val('fClass'), scale: val('fScale'), h1: clamp(parseInt(val('fH1')) || 0, 0, 100), wl });
   modal(editing ? 'Kurs bearbeiten' : 'Neuer Kurs', `
     <div class="row2">
-      <div class="field"><label>Fach</label><input id="fSubject" type="text" value="${esc(c.subject)}" placeholder="z. B. Mathematik"></div>
-      <div class="field"><label>Klasse / Kurs</label><input id="fClass" type="text" value="${esc(c.className)}" placeholder="z. B. 9b oder EF"></div>
+      <div class="field"><label>Fach</label><input id="fSubject" type="text" value="${esc(d.subject != null ? d.subject : c.subject)}" placeholder="z. B. Mathematik"></div>
+      <div class="field"><label>Klasse / Kurs</label><input id="fClass" type="text" value="${esc(d.className != null ? d.className : c.className)}" placeholder="z. B. 9b oder EF"></div>
     </div>
     <div class="field">
       <label>Notenskala (Eingabe & Anzeige)</label>
       <select id="fScale">
-        <option value="punkte" ${(c.scale||'punkte')==='punkte'?'selected':''}>Punkte 0–15 (Oberstufe)</option>
-        <option value="noten" ${c.scale==='noten'?'selected':''}>Noten 1–6 mit Tendenz</option>
+        <option value="punkte" ${((d.scale || c.scale)||'punkte')==='punkte'?'selected':''}>Punkte 0–15 (Oberstufe)</option>
+        <option value="noten" ${(d.scale || c.scale)==='noten'?'selected':''}>Noten 1–6 mit Tendenz</option>
       </select>
       <div class="hint">Intern wird immer gleich gerechnet — nur Eingabe und Anzeige ändern sich.</div>
     </div>
     <div class="field">
-      <label>Gewichtung schriftlich / mündlich</label>
-      <div class="row2">
-        <div><input id="fW" type="number" min="0" max="100" value="${c.weightWritten}"> <span class="hint">% schriftlich</span></div>
-        <div><input id="fM" type="number" min="0" max="100" value="${c.weightOral}" disabled> <span class="hint">% mündlich (autom.)</span></div>
-      </div>
-      <div class="hint">Standard: 40 % schriftlich / 60 % mündlich.</div>
+      <label>Kategorien und Gewichtung</label>
+      <div id="fCats"></div>
+      <select id="fCatAdd" style="margin-top:8px"></select>
+      <div class="hint">Kategorien mit 0 % bleiben sichtbar, zählen aber nicht. Hat eine Kategorie noch keine Note, verteilt sich ihr Anteil auf die übrigen. Eigene Kategorien lassen sich aus dem Kurs nehmen, solange dort keine Leistungen stehen.</div>
     </div>
     <div class="field">
       <label>Endjahresnote: Gewichtung 1. / 2. Halbjahr</label>
       <div class="row2">
-        <div><input id="fH1" type="number" min="0" max="100" value="${c.weightHY1}"> <span class="hint">% 1. HJ</span></div>
-        <div><input id="fH2" type="number" min="0" max="100" value="${c.weightHY2}" disabled> <span class="hint">% 2. HJ (autom.)</span></div>
+        <div><input id="fH1" type="number" min="0" max="100" value="${h1v}"> <span class="hint">% 1. HJ</span></div>
+        <div><input id="fH2" type="number" min="0" max="100" value="${100 - h1v}" disabled> <span class="hint">% 2. HJ (autom.)</span></div>
       </div>
       <div class="hint">Standard: 30 / 70.</div>
     </div>
@@ -3277,16 +3500,39 @@ function openCourseForm(course) {
     { label: 'Speichern', cls: 'primary', onClick: () => {
       const subject = val('fSubject').trim(), className = val('fClass').trim();
       if (!subject) return toast('Bitte ein Fach angeben.');
-      const w = clamp(parseInt(val('fW')) || 0, 0, 100);
+      const t = rows.total();
+      if (Math.abs(t - 100) > 1e-9) return toast(`Die Gewichte ergeben ${fmtNum(t)} % — bitte auf 100 % bringen.`);
       const h1 = clamp(parseInt(val('fH1')) || 0, 0, 100);
       const scale = val('fScale') || 'punkte';
-      if (editing) { c.subject = subject; c.className = className; c.scale = scale; c.weightWritten = w; c.weightOral = 100 - w; c.weightHY1 = h1; c.weightHY2 = 100 - h1; }
-      else { const nc = newCourse(subject, className); nc.scale = scale; nc.weightWritten = w; nc.weightOral = 100 - w; nc.weightHY1 = h1; nc.weightHY2 = 100 - h1; data.courses.push(nc); }
+      const target = editing ? c : newCourse(subject, className);
+      target.subject = subject; target.className = className; target.scale = scale;
+      target.weightHY1 = h1; target.weightHY2 = 100 - h1;
+      setCourseCats(target, wl);
+      if (!editing) data.courses.push(target);
       save(); closeModal(); render();
     }},
   ]);
-  const fw = document.getElementById('fW'), fm = document.getElementById('fM');
-  fw.oninput = () => { fm.value = clamp(100 - (parseInt(fw.value) || 0), 0, 100); };
+  const rows = catWeightRows(document.getElementById('fCats'), wl, {
+    removable: id => !editing || catUseInCourse(c, id) === 0,
+    onRemove: () => fillAdd(),
+  });
+  /* weitere Kategorien zum Kurs hinzufügen (oder eine neue anlegen) */
+  const addSel = document.getElementById('fCatAdd');
+  const fillAdd = () => {
+    const rest = customCats().filter(k => !wl.some(x => x.id === k.id));
+    addSel.innerHTML = `<option value="">+ Kategorie hinzufügen …</option>${rest.map(k => `<option value="${esc(k.id)}">${esc(k.name)}</option>`).join('')}<option value="__new">Neue Kategorie anlegen …</option>`;
+  };
+  fillAdd();
+  addSel.onchange = () => {
+    const v = addSel.value;
+    if (!v) return;
+    if (v === '__new') {
+      const dr = pending();
+      openCategoryForm(null, id => { wl.push({ id, weight: 0 }); openCourseForm(course, dr); }, () => openCourseForm(course, dr));
+      return;
+    }
+    wl.push({ id: v, weight: 0 }); rows.redraw(); fillAdd();
+  };
   const fh1 = document.getElementById('fH1'), fh2 = document.getElementById('fH2');
   fh1.oninput = () => { fh2.value = clamp(100 - (parseInt(fh1.value) || 0), 0, 100); };
 }
@@ -3316,17 +3562,19 @@ function openColumnForm(c, type, colId) {
   const t = col.type;
   const fixedPct = colPct(col);
   const wMode = fixedPct != null ? 'pct' : 'factor';
-  /* Bereichsgewicht als Bezugsgröße für den festen Anteil (Kurs-Standard) */
-  const blockPct = () => (chosen === 'schriftlich' ? c.weightWritten : c.weightOral);
-  modal(editing ? 'Note bearbeiten' : (t === 'schriftlich' ? 'Neue schriftliche Note' : 'Neue mündliche Note'), `
+  /* Schriftlich/Mündlich wechseln wie gewohnt per Segment; eine Note einer
+     eigenen Kategorie wählt aus allen Kategorien des Kurses. */
+  const typePicker = isStdCat(t)
+    ? zwSeg('cType', [['schriftlich', 'Schriftlich'], ['muendlich', 'Mündlich']], t)
+    : `<select id="cType" class="cat-picker">${courseCats(c).map(k => `<option value="${esc(k.id)}" ${k.id === t ? 'selected' : ''}>${esc(k.name)}</option>`).join('')}</select>`;
+  const title = editing ? 'Note bearbeiten'
+    : t === 'schriftlich' ? 'Neue schriftliche Note' : t === 'muendlich' ? 'Neue mündliche Note' : `Neue Note — ${esc(catName(t))}`;
+  modal(title, `
     <div class="field"><label>Bezeichnung</label>
-      <input id="cLabel" type="text" value="${esc(col.label)}" placeholder="${t==='schriftlich'?'z. B. 1. Klausur':'z. B. Mitarbeit'}"></div>
+      <input id="cLabel" type="text" value="${esc(col.label)}" placeholder="${t==='schriftlich'?'z. B. 1. Klausur':t==='muendlich'?'z. B. Mitarbeit':'z. B. Präsentation'}"></div>
     <div class="field"><label>Datum (optional)</label><input id="cDate" type="date" value="${col.date||''}"></div>
-    <div class="field"><label>Art</label>
-      <div class="seg" id="cType" style="width:100%">
-        <button type="button" data-t="schriftlich" style="flex:1" class="${t==='schriftlich'?'active':''}">Schriftlich</button>
-        <button type="button" data-t="muendlich" style="flex:1" class="${t==='muendlich'?'active':''}">Mündlich</button>
-      </div>
+    <div class="field"><label>${isStdCat(t) ? 'Art' : 'Kategorie'}</label>
+      ${typePicker}
     </div>
     <div class="field"><label>Gewichtung</label>
       <div class="seg" id="cWMode" style="width:100%">
@@ -3356,7 +3604,7 @@ function openColumnForm(c, type, colId) {
     { label: 'Speichern', cls: 'primary', onClick: () => {
       const label = val('cLabel').trim();
       if (!label) return toast('Bitte eine Bezeichnung angeben.');
-      col.label = label; col.date = val('cDate');
+      col.label = label; col.date = val('cDate'); col.type = chosen;
       /* Gewichtung: nur speichern, was vom Standard abweicht */
       delete col.factor; delete col.pct;
       if (wPick === 'pct') {
@@ -3374,18 +3622,9 @@ function openColumnForm(c, type, colId) {
   let wPick = wMode;
   const pctHint = () => {
     const el = document.getElementById('cPctHint'); if (!el) return;
-    const b = blockPct(), lbl = chosen === 'schriftlich' ? 'schriftlich' : 'mündlich';
-    const p = clamp(parseFloat(val('cPct').replace(',', '.')) || 0, 0, 100);
-    const restText = p > 0 && p < b
-      ? ` Die übrigen ${lbl}en Noten teilen sich dann noch ${fmtNum(b - p)} %.`
-      : (p >= b ? ` Das ist bereits der ganze ${lbl}e Anteil — die übrigen ${lbl}en Noten zählen dann nicht mehr.` : '');
-    el.textContent = `Anteil an der Gesamtnote. ${lbl.charAt(0).toUpperCase() + lbl.slice(1)} zählt insgesamt ${fmtNum(b)} %.${restText}`;
+    el.textContent = fixedPctHint(c, chosen, clamp(parseFloat(val('cPct').replace(',', '.')) || 0, 0, 100));
   };
-  document.querySelectorAll('#cType button').forEach(b => b.onclick = () => {
-    chosen = b.dataset.t; col.type = chosen;
-    document.querySelectorAll('#cType button').forEach(x => x.classList.toggle('active', x.dataset.t === chosen));
-    pctHint();
-  });
+  bindCatPicker('cType', v => { chosen = v; pctHint(); });
   document.querySelectorAll('#cWMode button').forEach(b => b.onclick = () => {
     wPick = b.dataset.w;
     document.querySelectorAll('#cWMode button').forEach(x => x.classList.toggle('active', x.dataset.w === wPick));
@@ -3404,7 +3643,7 @@ function openSonstige(c) {
     <div class="chip">
       <div class="chip-main"><b>${esc(so.label)}</b><span>Bonus ${so.percent}% · zählt nur, wenn sie den Schnitt hebt</span></div>
       <div style="display:flex;gap:8px;align-items:center">
-        <span class="chip-scope scope-${so.scope}">${scopeLabel(so.scope)}</span>
+        <span class="chip-scope ${so.scope === 'allgemein' || isStdCat(so.scope) ? 'scope-' + so.scope : 'scope-cat'}" style="${so.scope === 'allgemein' ? '' : catGrpStyle(so.scope)}">${esc(scopeLabel(so.scope))}</span>
         <button class="btn small" data-edit="${so.id}">Ändern</button>
         <button class="btn small danger" data-del="${so.id}">Löschen</button>
       </div>
@@ -3438,6 +3677,7 @@ function openSonstigeForm(c, id) {
           <option value="allgemein" ${so.scope==='allgemein'?'selected':''}>Allgemein (Gesamtnote)</option>
           <option value="schriftlich" ${so.scope==='schriftlich'?'selected':''}>Nur schriftlich</option>
           <option value="muendlich" ${so.scope==='muendlich'?'selected':''}>Nur mündlich</option>
+          ${courseCats(c).filter(k => !k.std).map(k => `<option value="${esc(k.id)}" ${so.scope===k.id?'selected':''}>Nur ${esc(k.name)}</option>`).join('')}
         </select>
       </div>
     </div>
@@ -3482,7 +3722,7 @@ function openSonstigeValues(c) {
     save(); closeModal(); renderTable(c);
   }}]);
 }
-const scopeLabel = s => ({ allgemein: 'Allgemein', schriftlich: 'Schriftlich', muendlich: 'Mündlich' }[s] || s);
+const scopeLabel = s => (s === 'allgemein' ? 'Allgemein' : catName(s));
 
 /* ---------- Schüler:innen verwalten ---------- */
 function openStudents(c) {

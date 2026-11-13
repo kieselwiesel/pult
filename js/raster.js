@@ -253,6 +253,7 @@ function createRasterRound(c) {
     return;
   }
   let count = 'muendlich';
+  const countPicker = cur => catPickerHtml(c, 'rcCount', cur, { order: ['muendlich', 'schriftlich'], extra: [['none', 'Gar nicht']] });
   modal('Einschätzung mit Raster', `
     <div class="field"><label>Vorlage</label>
       <select id="rcTpl">${tpls.map(t => `<option value="${t.id}">${esc(t.name)}${t.subject ? ' · ' + esc(t.subject) : ''}</option>`).join('')}</select>
@@ -263,11 +264,7 @@ function createRasterRound(c) {
       <div class="field"><label>Datum</label><input id="rcDate" type="date" value="${todayISO()}"></div>
     </div>
     <div class="field" style="margin-top:14px"><label>Zählt als</label>
-      <div class="seg" id="rcCount" style="width:100%">
-        <button type="button" data-v="muendlich" style="flex:1" class="active">Mündlich</button>
-        <button type="button" data-v="schriftlich" style="flex:1">Schriftlich</button>
-        <button type="button" data-v="none" style="flex:1">Gar nicht</button>
-      </div>
+      ${countPicker(count)}
       <div class="hint">„Gar nicht" = nur Rückmeldung bzw. Zwischenstand, fließt nicht in die Note ein.</div>
     </div>
   `, [
@@ -278,7 +275,7 @@ function createRasterRound(c) {
       if (!tpl) return;
       const def = rasterClone(tpl); delete def.id;
       const col = {
-        id: uid(), type: count === 'schriftlich' ? 'schriftlich' : 'muendlich',
+        id: uid(), type: count === 'none' ? 'muendlich' : count,
         label: val('rcLabel').trim() || 'Mitarbeit', date: val('rcDate'),
         raster: { sourceId: tpl.id, def, ratings: {}, manual: {} },
       };
@@ -288,10 +285,7 @@ function createRasterRound(c) {
       go({ name: 'raster', courseId: c.id, columnId: col.id, rTab: 'bogen', rStudent: null });
     }},
   ]);
-  document.querySelectorAll('#rcCount button').forEach(b => b.onclick = () => {
-    count = b.dataset.v;
-    document.querySelectorAll('#rcCount button').forEach(x => x.classList.toggle('active', x === b));
-  });
+  bindCatPicker('rcCount', v => count = v);
 }
 
 /* ============================================================
@@ -309,7 +303,7 @@ function renderRaster() {
   const tab = route.rTab === 'bogen' ? 'bogen' : 'liste';
   const active = c.students.filter(studentActive);
   const done = active.filter(s => rasterHasRating(col, s.id)).length;
-  const countTxt = col.noCount ? 'zählt nicht zur Note' : `zählt ${col.type === 'schriftlich' ? 'schriftlich' : 'mündlich'}`;
+  const countTxt = col.noCount ? 'zählt nicht zur Note' : catCountsText(col.type);
 
   app().innerHTML = `
     <div class="page-head">
@@ -549,11 +543,7 @@ function openRasterSettings(c, col) {
       <div class="field"><label>Datum</label><input id="reDate" type="date" value="${col.date || ''}"></div>
     </div>
     <div class="field" style="margin-top:14px"><label>Zählt als</label>
-      <div class="seg" id="reCount" style="width:100%">
-        <button type="button" data-v="muendlich" style="flex:1" class="${count === 'muendlich' ? 'active' : ''}">Mündlich</button>
-        <button type="button" data-v="schriftlich" style="flex:1" class="${count === 'schriftlich' ? 'active' : ''}">Schriftlich</button>
-        <button type="button" data-v="none" style="flex:1" class="${count === 'none' ? 'active' : ''}">Gar nicht</button>
-      </div>
+      ${catPickerHtml(c, 'reCount', count, { order: ['muendlich', 'schriftlich'], extra: [['none', 'Gar nicht']] })}
     </div>
     <div class="field" id="reWeightWrap" style="${count === 'none' ? 'display:none' : ''}"><label>Gewichtung</label>
       <div class="seg" id="reWMode" style="width:100%">
@@ -612,17 +602,10 @@ function openRasterSettings(c, col) {
   /* Hinweis zum festen Anteil — Bezug ist der Bereich, in den die Einschätzung zählt */
   const pctHint = () => {
     const el = document.getElementById('rePctHint'); if (!el) return;
-    const b = count === 'schriftlich' ? c.weightWritten : c.weightOral;
-    const lbl = count === 'schriftlich' ? 'schriftlich' : 'mündlich';
-    const p = clamp(parseFloat(val('rePct').replace(',', '.')) || 0, 0, 100);
-    const restText = p > 0 && p < b
-      ? ` Die übrigen ${lbl}en Noten teilen sich dann noch ${fmtNum(b - p)} %.`
-      : (p >= b ? ` Das ist bereits der ganze ${lbl}e Anteil — die übrigen ${lbl}en Noten zählen dann nicht mehr.` : '');
-    el.textContent = `Anteil an der Gesamtnote. ${lbl.charAt(0).toUpperCase() + lbl.slice(1)} zählt insgesamt ${fmtNum(b)} %.${restText}`;
+    el.textContent = count === 'none' ? '' : fixedPctHint(c, count, clamp(parseFloat(val('rePct').replace(',', '.')) || 0, 0, 100));
   };
-  document.querySelectorAll('#reCount button').forEach(b => b.onclick = () => {
-    count = b.dataset.v;
-    document.querySelectorAll('#reCount button').forEach(x => x.classList.toggle('active', x === b));
+  bindCatPicker('reCount', v => {
+    count = v;
     document.getElementById('reWeightWrap').style.display = count === 'none' ? 'none' : '';
     pctHint();
   });
@@ -1076,7 +1059,7 @@ function rasterSheetHtml(o) {
     const comp = computeHalf(c, hyKey, s.id);
     const eff = effGesamt(c, hyKey, s.id);
     more.push(`<div><b>Noten ${hyKey}. Halbjahr</b> <span class="rs-p-small">(Stand ${fmtDate(todayISO())})</span><br>
-      Ø schriftlich ${fmtGrade(comp.wAvg, scale, true)} · Ø mündlich ${fmtGrade(comp.mAvg, scale, true)} ·
+      ${comp.cats.map(b => `Ø ${esc(b.cat.std ? b.cat.adj : b.cat.name)} ${fmtGrade(b.avg, scale, true)}`).join(' · ')} ·
       Gesamt <b>${fmtGrade(eff.value, scale, true)}</b>${eff.value != null && scale !== 'noten' ? ` (${noteLabel(eff.value)})` : ''}</div>`);
   }
   if (opts.ha) {

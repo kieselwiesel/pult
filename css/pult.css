@@ -226,6 +226,8 @@ table.grades thead th { background: var(--head); font-size: 12px; color: var(--i
 table.grades thead th.grp-schrift { background: #eef4fb; color: #2b4d73; }
 table.grades thead th.grp-muend  { background: #f3f0fb; color: #4a3d73; }
 table.grades thead th.grp-sonst  { background: #fbf6ec; color: #7a5c1e; }
+/* eigene Notenkategorien: Farbe kommt als --cat aus dem Spaltenkopf */
+table.grades thead th.grp-cat    { background: color-mix(in srgb, var(--cat) 12%, var(--card)); color: color-mix(in srgb, var(--cat) 75%, var(--ink)); }
 table.grades thead th.grp-prev   { background: var(--hover); color: #4b5563; }
 table.grades thead th.grp-final  { background: var(--accent-soft); color: var(--accent-ink); }
 
@@ -455,6 +457,7 @@ input[type=range] { width: 100%; min-width: 0; }
 .scope-allgemein { background: #fbf6ec; color: #7a5c1e; }
 .scope-schriftlich { background: #eef4fb; color: #2b4d73; }
 .scope-muendlich { background: #f3f0fb; color: #4a3d73; }
+.scope-cat { background: color-mix(in srgb, var(--cat) 12%, var(--card)); color: color-mix(in srgb, var(--cat) 75%, var(--ink)); }
 
 .pill { font-size: 12px; font-weight: 700; padding: 3px 9px; border-radius: var(--radius); background: var(--accent-soft); color: var(--accent-ink); }
 
@@ -1082,6 +1085,8 @@ html.is-dark table.grades thead th.grp-schrift { background: #1f2a38; color: #a9
 html.is-dark table.rs-grid thead th { background: #262236; color: #c4b6ee; }
 html.is-dark table.grades thead th.grp-muend { background: #262236; color: #c4b6ee; }
 html.is-dark table.grades thead th.grp-sonst { background: #2e2717; color: #e5c88a; }
+html.is-dark table.grades thead th.grp-cat { background: color-mix(in srgb, var(--cat) 22%, var(--card)); color: color-mix(in srgb, var(--cat) 45%, #fff); }
+html.is-dark .scope-cat { background: color-mix(in srgb, var(--cat) 24%, var(--card)); color: color-mix(in srgb, var(--cat) 45%, #fff); }
 html.is-dark table.grades thead th.grp-ha { background: #2e2717; color: #e5c88a; }
 html.is-dark td.sonst-cell { background: #2a2416; }
 html.is-dark .sd-sonst { background: #2a2416; }
@@ -1097,3 +1102,23 @@ html.is-dark .ka-pill[data-kind="raster"] { background: #1e3a2a; color: #9fdcb0;
 html.is-dark .ka-pill[data-kind="test"] { background: #262236; color: #c4b6ee; }
 html.is-dark input[type=date]::-webkit-calendar-picker-indicator { filter: invert(.8); }
 html.is-dark input[type=time]::-webkit-calendar-picker-indicator { filter: invert(.8); }
+
+/* ---------- Notenkategorien ---------- */
+.cat-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; flex: none; }
+.btn.menu-btn .cat-dot { margin-right: 7px; }
+/* Segment mit Überlauf-Auswahl (Weitere …) */
+.seg select.seg-more { appearance: none; -webkit-appearance: none; border: none; border-radius: 0; margin: 0; width: auto; min-height: 38px;
+  padding: 0 28px 0 14px; font: inherit; font-weight: 600; font-size: 14px; color: var(--ink-soft); cursor: pointer;
+  background: var(--card) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23888' stroke-width='1.6' fill='none'/%3E%3C/svg%3E") no-repeat right 10px center; }
+.seg select.seg-more.active { background-color: var(--accent); color: #fff; }
+html.is-dark .seg select.seg-more.active { background-color: #1f6f65; }
+/* Gewichtungs-Zeilen (Kurs, individuelle Gewichtung, Vorgaben) */
+.cat-w-row { display: grid; grid-template-columns: minmax(0, 1fr) 86px 18px 38px; align-items: center; gap: 8px; margin-bottom: 6px; }
+.cat-w-row .cat-w-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cat-w-row input { margin: 0; min-height: 38px; text-align: right; }
+.cat-w-row .cat-w-rm { min-height: 34px; padding: 0; width: 38px; }
+.cat-w-sum { margin-top: 2px; }
+/* Farbwahl einer Kategorie */
+.cat-colors { display: flex; flex-wrap: wrap; gap: 10px; }
+.cat-color { width: 34px; height: 34px; border-radius: 50%; border: 3px solid transparent; cursor: pointer; padding: 0; box-shadow: inset 0 0 0 2px var(--card); }
+.cat-color.active { border-color: var(--ink); }

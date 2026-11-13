@@ -15,6 +15,7 @@ const SET_PAGES = [
   { key: 'schuljahr',   title: 'Schuljahr',        sub: 'Ferien, Zeugniskonferenz, Halbjahr' },
   { key: 'stundenplan', title: 'Stundenplan',      sub: 'Rhythmus und Stundenzeiten' },
   { key: 'noten',       title: 'Darstellung',      sub: 'Hell/Dunkel, Notentabelle, neue Kurse' },
+  { key: 'kategorien',  title: 'Notenkategorien',  sub: 'Eigene Kategorien, Gewichtung neuer Kurse' },
   { key: 'raster',      title: 'Bewertungsraster', sub: 'Vorlagen für Einschätzungen' },
   { key: 'sicherheit',  title: 'Sicherheit',       sub: 'App-Sperre' },
   { key: 'daten',       title: 'Daten',            sub: 'Backup, Sicherungsstände, Speicher' },
@@ -23,7 +24,12 @@ const SET_PAGES = [
 
 /* Vorgaben für neue Kurse */
 function courseDefaults() {
-  return Object.assign({ scale: 'punkte', weightWritten: 40, weightHY1: 30 }, data.meta.courseDefaults || {});
+  const d = Object.assign({ scale: 'punkte', weightWritten: 40, weightHY1: 30 }, data.meta.courseDefaults || {});
+  /* Gewichte je Kategorie; ältere Vorgaben kennen nur „% schriftlich" */
+  const cw = Object.assign({}, d.catWeights || {});
+  if (cw.schriftlich == null && cw.muendlich == null) { cw.schriftlich = d.weightWritten; cw.muendlich = 100 - d.weightWritten; }
+  d.catWeights = cw;
+  return d;
 }
 
 function renderSettings() {
@@ -52,7 +58,7 @@ function renderSettings() {
   document.getElementById('setBack').onclick = () => go({ name: 'settings', setPage: null });
 
   const body = document.getElementById('setBody');
-  ({ schuljahr: setSchuljahr, stundenplan: setStundenplan, noten: setNoten, raster: setRaster,
+  ({ schuljahr: setSchuljahr, stundenplan: setStundenplan, noten: setNoten, kategorien: setKategorien, raster: setRaster,
      sicherheit: setSicherheit, daten: setDaten, ueber: setUeber })[shown](body);
 }
 const setSaved = () => { save(); toast('Gespeichert.'); };
@@ -156,24 +162,127 @@ function setNoten(body) {
           <option value="punkte" ${cd.scale === 'punkte' ? 'selected' : ''}>Punkte 0–15</option>
           <option value="noten" ${cd.scale === 'noten' ? 'selected' : ''}>Noten 1–6 mit Tendenz</option>
         </select></div>
-      <div class="row2">
-        <div class="field"><label>Schriftlich %</label><input id="mWW" type="number" min="0" max="100" value="${cd.weightWritten}"></div>
-        <div class="field"><label>1. Halbjahr % (Endjahr)</label><input id="mWH" type="number" min="0" max="100" value="${cd.weightHY1}"></div>
-      </div>
-      <div class="hint" style="margin-top:6px">Bestehende Kurse bleiben unverändert — dort unter <b>Mehr → Kurs bearbeiten</b>.</div>
+      <div class="field"><label>1. Halbjahr % (Endjahr)</label><input id="mWH" type="number" min="0" max="100" value="${cd.weightHY1}"></div>
+      <div class="hint" style="margin-top:6px">Die Gewichtung der Kategorien steht unter <a href="#" id="mToCats">Notenkategorien</a>. Bestehende Kurse bleiben unverändert — dort unter <b>Mehr → Kurs bearbeiten</b>.</div>
     </section>`;
   document.getElementById('mLayout').onchange = e => { m.tableLayout = e.target.value || 'standard'; setSaved(); };
   document.getElementById('mTheme').onchange = e => { m.theme = e.target.value; applyTheme(); setSaved(); };
   document.getElementById('mBlind').onchange = e => { m.blindDays = Number(e.target.value) || 21; setSaved(); };
   const keep = () => {
-    m.courseDefaults = {
+    m.courseDefaults = Object.assign({}, m.courseDefaults || {}, {
       scale: val('mScale') || 'punkte',
-      weightWritten: clamp(parseInt(val('mWW'), 10) || 0, 0, 100),
       weightHY1: clamp(parseInt(val('mWH'), 10) || 0, 0, 100),
-    };
+    });
     setSaved();
   };
-  ['mScale', 'mWW', 'mWH'].forEach(id => document.getElementById(id).onchange = keep);
+  ['mScale', 'mWH'].forEach(id => document.getElementById(id).onchange = keep);
+  document.getElementById('mToCats').onclick = e => { e.preventDefault(); go({ name: 'settings', setPage: 'kategorien' }); };
+}
+
+/* ---------- Notenkategorien ----------
+   Eigene Kategorien gelten für alle Kurse; welche ein Kurs führt und wie
+   stark sie dort zählen, steht im Kurs (Kurs bearbeiten). Hier außerdem die
+   Gewichtung, mit der neue Kurse starten. */
+function setKategorien(body) {
+  const list = customCats();
+  const usage = id => {
+    let courses = 0, cols = 0;
+    data.courses.forEach(c => {
+      const n = catUseInCourse(c, id);
+      if (n || (c.cats || []).some(x => x.id === id)) courses++;
+      cols += n;
+    });
+    return { courses, cols };
+  };
+  const rows = list.map(k => {
+    const u = usage(k.id);
+    const sub = [u.courses ? `in ${u.courses} ${u.courses === 1 ? 'Kurs' : 'Kursen'}` : 'noch in keinem Kurs', u.cols ? `${u.cols} ${u.cols === 1 ? 'Leistung' : 'Leistungen'}` : ''].filter(Boolean).join(' · ');
+    return `<div class="chip">
+      <div class="chip-main"><b><i class="cat-dot" style="background:${k.color}"></i>${esc(k.name)}</b><span>${sub}</span></div>
+      <div style="display:flex;gap:8px">
+        <button class="btn small" data-kedit="${esc(k.id)}">Ändern</button>
+        <button class="btn small danger" data-kdel="${esc(k.id)}">Löschen</button>
+      </div></div>`;
+  }).join('');
+  body.innerHTML = `
+    <section class="set-card">
+      <h2>Kategorien</h2>
+      <div class="chip-list">
+        ${STD_CATS.map(k => `<div class="chip"><div class="chip-main"><b><i class="cat-dot" style="background:${k.color}"></i>${k.name}</b><span>fest eingebaut</span></div></div>`).join('')}
+        ${rows}
+      </div>
+      <div style="margin-top:12px"><button class="btn small" id="kNew">+ Neue Kategorie</button></div>
+      <div class="hint" style="margin-top:8px">Eigene Kategorien stehen allen Kursen zur Verfügung. Im Kurs nimmst du sie unter <b>Mehr → Kurs bearbeiten</b> auf und legst die Gewichtung fest — oder direkt über <b>+ Leistung → Kategorie-Note</b>.</div>
+    </section>
+    <section class="set-card">
+      <h2>Gewichtung für neue Kurse</h2>
+      <div id="kDefaults"></div>
+      <div class="hint" style="margin-top:6px">Eigene Kategorien mit 0 % werden in neuen Kursen nicht angelegt. Bestehende Kurse bleiben unverändert.</div>
+    </section>`;
+  document.getElementById('kNew').onclick = () => openCategoryForm(null, () => { closeModal(); renderSettings(); }, closeModal);
+  body.querySelectorAll('[data-kedit]').forEach(b => b.onclick = () => openCategoryForm(b.dataset.kedit, () => { closeModal(); renderSettings(); }, closeModal));
+  body.querySelectorAll('[data-kdel]').forEach(b => b.onclick = () => openCategoryDelete(b.dataset.kdel));
+
+  const cd = courseDefaults();
+  const wl = STD_CATS.concat(list).map(k => ({ id: k.id, weight: cd.catWeights[k.id] || 0 }));
+  const r = catWeightRows(document.getElementById('kDefaults'), wl, {
+    onChange: () => {
+      if (Math.abs(r.total() - 100) > 1e-9) return;      // erst speichern, wenn es aufgeht
+      const cw = {}; wl.forEach(x => cw[x.id] = x.weight);
+      data.meta.courseDefaults = Object.assign({}, data.meta.courseDefaults || {}, { catWeights: cw, weightWritten: cw.schriftlich || 0 });
+      save();
+    },
+  });
+}
+/* Eigene Kategorie löschen. Was darin steht (Noten, Bonus, Zwischenstände)
+   und ihr Gewicht wandern in eine andere Kategorie — es geht nichts verloren. */
+function openCategoryDelete(id) {
+  const k = customCats().find(x => x.id === id); if (!k) return;
+  let cols = 0, courses = 0;
+  data.courses.forEach(c => { const n = catUseInCourse(c, id); cols += n; if (n || (c.cats || []).some(x => x.id === id && x.weight > 0)) courses++; });
+  const targets = STD_CATS.concat(customCats().filter(x => x.id !== id));
+  modal(`„${esc(k.name)}“ löschen?`, `
+    ${cols || courses ? `<p>Die Kategorie wird in <b>${courses} ${courses === 1 ? 'Kurs' : 'Kursen'}</b> verwendet${cols ? ` (${cols} ${cols === 1 ? 'Leistung' : 'Leistungen'})` : ''}. Leistungen und Gewichtsanteil gehen über an:</p>
+      <div class="field"><select id="kTarget">${targets.map(x => `<option value="${esc(x.id)}" ${x.id === 'muendlich' ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></div>`
+      : '<p>Die Kategorie wird in keinem Kurs verwendet.</p>'}`, [
+    { label: 'Abbrechen', onClick: closeModal },
+    { label: 'Löschen', cls: 'danger', onClick: () => {
+      const tgt = document.getElementById('kTarget') ? val('kTarget') : 'muendlich';
+      moveCategory(id, tgt);
+      data.meta.categories = customCats().filter(x => x.id !== id);
+      save(); closeModal(); renderSettings();
+      toast(`„${k.name}“ gelöscht.`);
+    }},
+  ]);
+}
+/* Alles einer Kategorie in eine andere verschieben (Kurse, individuelle
+   Gewichte, Vorgaben) */
+function moveCategory(from, to) {
+  data.courses.forEach(c => {
+    ['1', '2'].forEach(h => {
+      const hy = c.halfYears[h];
+      hy.columns.forEach(col => {
+        if (col.type === from) col.type = to;
+        if (col.type === 'zwischenstand' && col.source === from) col.source = to;
+      });
+      hy.sonstige.forEach(so => { if (so.scope === from) so.scope = to; });
+    });
+    if (Array.isArray(c.cats) && c.cats.some(x => x.id === from)) {
+      const list = courseCats(c).map(x => ({ id: x.id, weight: x.weight }));
+      const f = list.find(x => x.id === from), t = list.find(x => x.id === to);
+      if (t) t.weight += f ? f.weight : 0; else list.push({ id: to, weight: f ? f.weight : 0 });
+      setCourseCats(c, list.filter(x => x.id !== from));
+    }
+  });
+  Object.values(data.weightOverride || {}).forEach(byHy => Object.values(byHy || {}).forEach(ov => {
+    if (!ov || typeof ov !== 'object' || ov[from] == null) return;
+    ov[to] = (Number(ov[to]) || 0) + (Number(ov[from]) || 0); delete ov[from];
+  }));
+  const cd = data.meta.courseDefaults;
+  if (cd && cd.catWeights && cd.catWeights[from] != null) {
+    cd.catWeights[to] = (cd.catWeights[to] || 0) + cd.catWeights[from]; delete cd.catWeights[from];
+    cd.weightWritten = cd.catWeights.schriftlich || 0;
+  }
 }
 
 /* ---------- Bewertungsraster: Liste bzw. Editor (raster.js) ---------- */

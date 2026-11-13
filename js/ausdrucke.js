@@ -202,12 +202,10 @@ function pdNotenPage(c, o) {
       cell: s => pdG((data.grades[s.id] || {})[col.id], c, false),
       mean: () => pdMean(c, s => (data.grades[s.id] || {})[col.id]),
     });
-    const sCols = hy.columns.filter(x => x.type === 'schriftlich');
-    const mCols = hy.columns.filter(x => x.type === 'muendlich');
-    if (o.singles) sCols.forEach(col => grp.push(single(col)));
-    grp.push({ head: '<th>Ø schr.</th>', cls: 'pd-avg', cell: s => pdG(computeHalf(c, h, s.id).wAvg, c, true), mean: () => pdMean(c, s => computeHalf(c, h, s.id).wAvg) });
-    if (o.singles) mCols.forEach(col => grp.push(single(col)));
-    grp.push({ head: '<th>Ø mündl.</th>', cls: 'pd-avg', cell: s => pdG(computeHalf(c, h, s.id).mAvg, c, true), mean: () => pdMean(c, s => computeHalf(c, h, s.id).mAvg) });
+    courseCats(c).forEach(k => {
+      if (o.singles) hy.columns.filter(x => x.type === k.id).forEach(col => grp.push(single(col)));
+      grp.push({ head: `<th>Ø ${esc(k.short)}</th>`, cls: 'pd-avg', cell: s => pdG(catAvg(c, h, s.id, k.id), c, true), mean: () => pdMean(c, s => catAvg(c, h, s.id, k.id)) });
+    });
     if (o.singles) hy.sonstige.forEach(so => grp.push({
       head: `<th>${esc(so.label)}<small>Bonus ${so.percent} %</small></th>`,
       cell: s => pdG((data.sonstigeValues[s.id] || {})[so.id], c, false),
@@ -236,7 +234,7 @@ function pdNotenPage(c, o) {
   const foot = o.mean ? `<tfoot><tr><td></td><td class="pd-name">Ø Kurs</td>${all.map(d => `<td class="${d.cls || ''}">${pdG(d.mean(), c, true)}</td>`).join('')}</tr></tfoot>` : '';
 
   return `<section class="pp-sheet pd">
-    ${pdHead(pdCourseSub(c), 'Notenübersicht', `${scaleName(c.scale)} · Gewichtung ${c.weightWritten}/${c.weightOral}<br>${hys.length === 2 ? 'Schuljahr' : hys[0] + '. Halbjahr'}`)}
+    ${pdHead(pdCourseSub(c), 'Notenübersicht', `${scaleName(c.scale)} · Gewichtung ${esc(weightSummary(c))}<br>${hys.length === 2 ? 'Schuljahr' : hys[0] + '. Halbjahr'}`)}
     ${c.students.length ? `<table class="pd-t" data-split="2"><thead>${head1}${head2}</thead><tbody>${rows}</tbody>${foot}</table>` : '<p>Keine Schüler:innen.</p>'}
     ${pdFoot(hasManual ? '* manuell festgelegt' : '')}
   </section>`;
@@ -309,11 +307,12 @@ function pdZeugnisPage(c, o) {
   const people = c.students.filter(studentActive);
   let hasManual = false;
   const fin = (e) => { const man = e.manual != null && e.computed != null; if (man) hasManual = true; return e.value == null ? '' : pdG(e.value, c, true) + (man ? '*' : ''); };
-  const heads = ['Ø schr.', 'Ø mündl.', h === '2' ? 'Gesamt 1. HJ' : null, `Gesamt ${h}. HJ`, h === '2' ? `Endjahr<small>${c.weightHY1}/${c.weightHY2}</small>` : null].filter(Boolean);
+  const kats = courseCats(c);
+  const heads = [...kats.map(k => `Ø ${esc(k.short)}`), h === '2' ? 'Gesamt 1. HJ' : null, `Gesamt ${h}. HJ`, h === '2' ? `Endjahr<small>${c.weightHY1}/${c.weightHY2}</small>` : null].filter(Boolean);
   const rows = people.map((s, i) => {
     const comp = computeHalf(c, h, s.id);
     const cells = [
-      `<td class="pd-avg">${pdG(comp.wAvg, c, true)}</td>`, `<td class="pd-avg">${pdG(comp.mAvg, c, true)}</td>`,
+      ...comp.cats.map(b => `<td class="pd-avg">${pdG(b.avg, c, true)}</td>`),
       h === '2' ? `<td>${fin(effGesamt(c, '1', s.id))}</td>` : '',
       `<td class="pd-final">${fin(effGesamt(c, h, s.id))}</td>`,
       h === '2' ? `<td class="pd-final">${fin(effEndjahr(c, s.id))}</td>` : '',
@@ -334,7 +333,7 @@ function pdZeugnisPage(c, o) {
   }
 
   return `<section class="pp-sheet pd">
-    ${pdHead(pdCourseSub(c), `Zeugnisübersicht ${h === '2' ? '2. Halbjahr' : '1. Halbjahr'}`, `${scaleName(c.scale)} · Gewichtung ${c.weightWritten}/${c.weightOral}<br>${people.length} Schüler:innen`)}
+    ${pdHead(pdCourseSub(c), `Zeugnisübersicht ${h === '2' ? '2. Halbjahr' : '1. Halbjahr'}`, `${scaleName(c.scale)} · Gewichtung ${esc(weightSummary(c))}<br>${people.length} Schüler:innen`)}
     ${people.length ? `<table class="pd-t" data-split="2"><thead><tr><th>Nr.</th><th class="pd-name">Name</th>${heads.map(x => `<th>${x}</th>`).join('')}${o.remark ? '<th class="pd-remark">Bemerkung</th>' : ''}</tr></thead>
       <tbody>${rows}</tbody></table>` : '<p>Keine aktiven Schüler:innen.</p>'}
     ${spiegel}
@@ -362,12 +361,10 @@ function pdBogenPage(c, s, o) {
       `<div class="pd-line pd-dim"><span>Bonus: ${esc(so.label)} (${so.percent} %)</span><span>${pdG((data.sonstigeValues[s.id] || {})[so.id], c, false) || '–'}</span></div>`).join('');
     const man = eff.manual != null && eff.computed != null;
     return `<div class="pd-box"><h3>${h}. Halbjahr</h3>
-      <div class="pd-sec">Schriftlich</div>${lines(hy.columns.filter(x => x.type === 'schriftlich'), comp.wParts)}${bonus('schriftlich')}
-      <div class="pd-line pd-sum"><span>Ø schriftlich</span><b>${pdG(comp.wAvg, c, true) || '–'}</b></div>
-      <div class="pd-sec">Mündlich</div>${lines(hy.columns.filter(x => x.type === 'muendlich'), comp.mParts)}${bonus('muendlich')}
-      <div class="pd-line pd-sum"><span>Ø mündlich</span><b>${pdG(comp.mAvg, c, true) || '–'}</b></div>
+      ${comp.cats.map(b => `<div class="pd-sec">${esc(b.cat.name)}${b.counts ? '' : b.weight > 0 ? '' : ' <small>(zählt nicht)</small>'}</div>${lines(hy.columns.filter(x => x.type === b.id), b.parts)}${bonus(b.id)}
+      <div class="pd-line pd-sum"><span>Ø ${esc(b.cat.std ? b.cat.adj : b.cat.name)}</span><b>${pdG(b.avg, c, true) || '–'}</b></div>`).join('')}
       ${bonus('allgemein')}
-      <div class="pd-line pd-total"><span>Gesamtnote${man ? ' (festgelegt)' : ''}<small> · Gewichtung ${comp.wt.w}/${comp.wt.m}</small></span><b>${pdGL(eff.value, c)}</b></div>
+      <div class="pd-line pd-total"><span>Gesamtnote${man ? ' (festgelegt)' : ''}<small> · Gewichtung ${comp.cats.map(b => fmtNum(comp.wt.map[b.id] || 0)).join('/')}</small></span><b>${pdGL(eff.value, c)}</b></div>
     </div>`;
   };
 
@@ -379,7 +376,7 @@ function pdBogenPage(c, s, o) {
   }
   if (o.verlauf) {
     const series = gradeSeries(c, s.id, hys);
-    if (series.length >= 2) blocks.push(`<div class="pd-box"><h3>Notenverlauf</h3>${pdVerlaufSvg(series, c.scale)}</div>`);
+    if (series.length >= 2) blocks.push(`<div class="pd-box"><h3>Notenverlauf</h3>${pdVerlaufSvg(series, c.scale, c)}</div>`);
   }
   if (o.raster) {
     const rCols = hys.flatMap(h => c.halfYears[h].columns.filter(x => x.raster && rasterHasRating(x, s.id)));
@@ -414,7 +411,7 @@ function pdBogenPage(c, s, o) {
 }
 
 /* Verlauf als SVG mit festen Farben (die Datei-Ausgabe kennt keine CSS-Variablen) */
-function pdVerlaufSvg(series, scale) {
+function pdVerlaufSvg(series, scale, c) {
   const n = series.length, W = 640, H = 150, pl = 34, pr = 10, pt = 8, pb = 18;
   const x = i => pl + i * (W - pl - pr) / (n - 1);
   const y = v => pt + (15 - v) / 15 * (H - pt - pb);
@@ -427,9 +424,9 @@ function pdVerlaufSvg(series, scale) {
     bound = `<line x1="${bx}" x2="${bx}" y1="${pt}" y2="${H - pb}" stroke="#999" stroke-dasharray="3 3" stroke-width="0.7"/><text x="${bx}" y="${H - 5}" font-size="8" text-anchor="middle" fill="#777">2. HJ</text>`;
   }
   const line = `<polyline points="${series.map((p, i) => `${x(i).toFixed(1)},${y(p.value).toFixed(1)}`).join(' ')}" fill="none" stroke="#16514b" stroke-width="1.2" opacity=".45"/>`;
-  const dots = series.map((p, i) => `<circle cx="${x(i).toFixed(1)}" cy="${y(p.value).toFixed(1)}" r="3.2" fill="${p.type === 'schriftlich' ? '#3f6fb0' : '#7a63bd'}"/>`).join('');
+  const dots = series.map((p, i) => `<circle cx="${x(i).toFixed(1)}" cy="${y(p.value).toFixed(1)}" r="3.2" fill="${catColor(p.type)}"/>`).join('');
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block">${grid}${bound}${line}${dots}</svg>
-    <div class="pd-legend"><span style="color:#3f6fb0">●</span> schriftlich · <span style="color:#7a63bd">●</span> mündlich — chronologisch</div>`;
+    <div class="pd-legend">${(c ? courseCats(c) : STD_CATS).filter(k => series.some(p => p.type === k.id)).map(k => `<span style="color:${k.color}">●</span> ${esc(k.std ? k.adj : k.name)}`).join(' · ')} — chronologisch</div>`;
 }
 
 /* ============================================================
