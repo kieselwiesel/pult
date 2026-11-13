@@ -177,7 +177,7 @@ function renderKurs() {
       ${card('Notizen', notes.map(n => `<div class="kd-note note-item"><button class="note-main" data-note-toggle aria-expanded="false">
           <span class="cs-sub">${n.date ? fmtDate(n.date) : '–'}</span><span class="note-text">${esc(n.text)}</span></button></div>`).join('')
         || '<div class="cs-sub">Noch keine Kursnotizen.</div>', linkBtn('kdNotes', 'Öffnen'))}
-      ${card('Einsammeln & Hausaufgaben', `${lists.map(x => `<div class="kd-row static"><b>${esc(x.l.title)}</b><span>${x.done}/${act.length} abgegeben${x.l.dueDate ? ' · bis ' + fmtDate(x.l.dueDate) : ''}</span></div>`).join('')
+      ${card('Einsammeln & Hausaufgaben', `${lists.map(x => `<button class="kd-row" data-list="${x.l.id}"><b>${esc(x.l.title)}</b><span>${x.done}/${act.length} abgegeben${x.l.dueDate ? ' · bis ' + fmtDate(x.l.dueDate) : ''}</span></button>`).join('')
         || '<div class="cs-sub">Keine offenen Listen.</div>'}
         <div class="cs-sub" style="margin-top:8px">Hausaufgaben: ${haQuote == null ? 'noch nichts erfasst' : `${haQuote} % gemacht (${ha.n}× fehlend)`}</div>`, linkBtn('kdLists', 'Listen'))}
     </div>`;
@@ -194,6 +194,7 @@ function renderKurs() {
   document.getElementById('kdNotes').onclick = () => openNotes(c, null);
   bindNoteToggles(app());
   document.getElementById('kdLists').onclick = () => openLists(c);
+  app().querySelectorAll('[data-list]').forEach(b => b.onclick = () => openList(c, b.dataset.list));
   document.getElementById('kdTerminAdd').onclick = () => openTerminForm(null, { courseId: c.id });
   app().querySelectorAll('[data-termin]').forEach(b => b.onclick = () => openTerminForm(b.dataset.termin));
   app().querySelectorAll('[data-open-plan]').forEach(b => b.onclick = () => go({ name: 'plan', courseId: c.id, planId: b.dataset.openPlan }));

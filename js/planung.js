@@ -13,8 +13,13 @@
    als Doppelstunde mit einer gemeinsamen Planung — gespeichert wird dann
    die erste der beiden Stunden.
 
-   „Nach hinten verschieben": die Stunde rückt in den nächsten Termin des
-   Kurses, belegte Termine rücken mit — bis zur ersten freien Stunde.
+   Verschieben: ↑/↓ tauscht eine Stunde mit dem vorherigen bzw. nächsten
+   Termin des Kurses (ist er frei, rückt sie einfach dorthin). ⇊ schiebt sie
+   in den nächsten Termin, belegte Termine rücken mit — bis zur ersten freien
+   Stunde.
+
+   Drucken / Export (unten): Planung als A4-Seiten oder JSON-Datei, Import
+   aus einer solchen Datei in einen beliebigen Kurs.
 
    body ist formatierter Text (ein kleiner HTML-Ausschnitt: Überschrift,
    fett, kursiv, Liste, Farbe). Er läuft beim Speichern und beim Anzeigen
@@ -249,6 +254,53 @@ function shiftPlanBack(plan) {
   }
   return true;
 }
+/* ---------- Mit dem Nachbartermin tauschen ---------- */
+/* Termin der Stunde und der vorherige (dir < 0) bzw. nächste (dir > 0)
+   Termin des Kurses; null, wenn die Stunde nicht im Stundenplan steht. */
+function neighborSlots(plan, dir) {
+  if (!plan.date) return null;
+  let from = plan.date, days = 400;
+  if (dir < 0) { const d = new Date(plan.date + 'T00:00:00'); d.setDate(d.getDate() - 180); from = dateToISO(d); days = 181; }
+  const slots = courseSlots(plan.courseId, from, 2000, days);
+  const idx = slots.findIndex(s => s.date === plan.date && s.periods.includes(plan.period));
+  if (idx < 0) return null;
+  return { cur: slots[idx], target: slots[idx + (dir < 0 ? -1 : 1)] || null };
+}
+/* Termin ist schon vorbei (heute: seine letzte Stunde ist zu Ende) */
+function slotPast(s) {
+  const today = todayISO();
+  if (s.date !== today) return s.date < today;
+  const now = new Date();
+  const hm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  const p = (data.timetable.periods || [])[s.periods[s.periods.length - 1]];
+  return !!(p && p.end && p.end <= hm);
+}
+function doSwapPlan(plan, dir, after) {
+  const n = neighborSlots(plan, dir);
+  if (!n) return toast('Verschieben nicht möglich — die Stunde steht nicht (mehr) im Stundenplan.');
+  if (!n.target) return toast(dir < 0 ? 'Davor gibt es keine Stunde mehr.' : 'Danach gibt es keine Stunde mehr im Stundenplan.');
+  if (dir < 0 && slotPast(n.target) && !slotPast(n.cur)) return toast('Die vorherige Stunde ist schon vorbei.');
+  const others = plansAtSlot(n.target).filter(q => q.id !== plan.id);
+  others.forEach(q => { q.date = n.cur.date; q.period = n.cur.period; });
+  plan.date = n.target.date; plan.period = n.target.period;
+  save();
+  toast(others.length ? `Getauscht mit „${planTitle(others[0])}“.` : `Verschoben auf ${planLabel(plan)}.`);
+  if (after) after();
+}
+/* Knöpfe ↑ ↓ ⇊ für eine zugeordnete Stunde */
+function planMoveHtml(p, noUp) {
+  return `<span class="pl-move">
+    <button class="btn small" data-move-up="${p.id}" ${noUp ? 'disabled' : ''} title="Mit der vorherigen Stunde tauschen" aria-label="Mit der vorherigen Stunde tauschen">↑</button>
+    <button class="btn small" data-move-down="${p.id}" title="Mit der nächsten Stunde tauschen" aria-label="Mit der nächsten Stunde tauschen">↓</button>
+    <button class="btn small" data-shift="${p.id}" title="Diese und alle folgenden Stunden eine Stunde nach hinten schieben — bis zur nächsten freien" aria-label="Diese und alle folgenden nach hinten schieben">⇊</button>
+  </span>`;
+}
+function bindPlanMove(root, after) {
+  root.querySelectorAll('[data-move-up]').forEach(b => b.onclick = () => { const p = getPlan(b.dataset.moveUp); if (p) doSwapPlan(p, -1, after); });
+  root.querySelectorAll('[data-move-down]').forEach(b => b.onclick = () => { const p = getPlan(b.dataset.moveDown); if (p) doSwapPlan(p, 1, after); });
+  root.querySelectorAll('[data-shift]').forEach(b => b.onclick = () => { const p = getPlan(b.dataset.shift); if (p) doShiftBack(p, after); });
+}
+
 function doShiftBack(plan, after) {
   if (!plan.date) return;
   const n = (() => {   // wie viele rücken mit? (für die Meldung)
@@ -368,19 +420,18 @@ function renderPlanung() {
 
   /* nächste Termine mit ihrer Planung */
   const next = upcomingSlots(c.id, 8);
-  const slotRows = next.map(s => {
+  const slotRows = next.map((s, i) => {
     const p = plansAtSlot(s)[0];
     return `<div class="pl-slot ${p ? '' : 'free'}">
       <span class="pl-slot-when">${esc(slotLabel(s))}</span>
       ${p ? `<button class="pl-slot-topic" data-open="${p.id}">${esc(planTitle(p))}${p.unitId && getUnit(p.unitId) ? `<small>${esc(getUnit(p.unitId).title)}</small>` : ''}</button>
-             <button class="btn small" data-shift="${p.id}" title="Diese und die folgenden Stunden bis zur nächsten freien nach hinten schieben">Nach hinten</button>`
+             ${planMoveHtml(p, i === 0)}`
           : `<span class="pl-slot-topic cs-sub">noch nicht geplant</span>
              <button class="btn small" data-plan-slot="${slotKey(s)}">Planen</button>`}
     </div>`;
   }).join('');
 
-  const units = courseUnits(c.id).slice().sort((a, b) =>
-    (a.from || '9999').localeCompare(b.from || '9999') || (a.created || '').localeCompare(b.created || ''));
+  const units = sortedUnits(c.id);
   const plans = coursePlans(c.id);
   const loose = plans.filter(p => !p.unitId || !getUnit(p.unitId)).sort(planSort);
   const cur = currentUnitId(units, plans);
@@ -420,6 +471,7 @@ function renderPlanung() {
       <div><h1>Planung</h1><div class="sub">${esc(c.subject)} ${esc(c.className)}</div></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn small" id="plToCourse">Kurs</button>
+        <button class="btn small" id="plTransfer">Drucken / Export</button>
         <button class="btn small" id="plNewUnit">+ Einheit</button>
         <button class="btn small primary" id="plNewPlan">+ Stunde</button>
       </div>
@@ -440,6 +492,7 @@ function renderPlanung() {
 
   app().querySelectorAll('[data-pc]').forEach(b => b.onclick = () => go({ name: 'planung', courseId: b.dataset.pc }));
   document.getElementById('plToCourse').onclick = () => go({ name: 'kurs', courseId: c.id });
+  document.getElementById('plTransfer').onclick = () => openPlanungTransfer(c);
   document.getElementById('plNewUnit').onclick = () => openUnitForm(c, null);
   document.getElementById('plNewPlan').onclick = () => openNewPlan(c, {});
   app().querySelectorAll('[data-open]').forEach(b => b.onclick = () => go({ name: 'plan', courseId: c.id, planId: b.dataset.open }));
@@ -459,7 +512,7 @@ function renderPlanung() {
       label();
     };
   });
-  app().querySelectorAll('[data-shift]').forEach(b => b.onclick = () => { const p = getPlan(b.dataset.shift); if (p) doShiftBack(p, renderPlanung); });
+  bindPlanMove(app(), renderPlanung);
   app().querySelectorAll('[data-done]').forEach(b => b.onclick = () => {
     const p = getPlan(b.dataset.done); if (!p) return;
     p.done = !p.done; save(); renderPlanung();
@@ -540,7 +593,8 @@ function renderPlan() {
       <div><h1 id="plH">${esc(planTitle(p))}</h1>
         <div class="sub">${esc(c.subject)} ${esc(c.className)} · ${esc(planLabel(p, true))}</div></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        ${p.date ? '<button class="btn small" id="plShift" title="Diese und die folgenden Stunden bis zur nächsten freien nach hinten schieben">Nach hinten verschieben</button>' : ''}
+        ${p.date ? planMoveHtml(p, (() => { const n = neighborSlots(p, -1); return !n || !n.target || (slotPast(n.target) && !slotPast(n.cur)); })()) : ''}
+        <button class="btn small" id="plPrint">Drucken</button>
         <button class="btn small" id="plToList">Alle Planungen</button>
         <button class="btn small danger" id="plDel">Löschen</button>
       </div>
@@ -574,7 +628,8 @@ function renderPlan() {
   const applySlot = () => assignPlan(p, readSlotPicker(), () => { toast(p.date ? `Zugeordnet: ${planLabel(p)}` : 'Jetzt ein Entwurf.'); renderPlan(); });
   document.getElementById('plSlot').addEventListener('change', () => { if (val('plSlot') !== '__custom') applySlot(); });
   ['plCDate', 'plCPer'].forEach(id => document.getElementById(id).addEventListener('change', applySlot));
-  const sh = document.getElementById('plShift'); if (sh) sh.onclick = () => doShiftBack(p, renderPlan);
+  bindPlanMove(app().querySelector('.page-head'), renderPlan);
+  document.getElementById('plPrint').onclick = () => { save(); printSinglePlan(p); };
   document.getElementById('plToList').onclick = () => go({ name: 'planung', courseId: c.id });
   document.getElementById('plDel').onclick = () => modal('Stunde löschen?', `<p><b>${esc(planTitle(p))}</b> (${esc(planLabel(p))}) wird gelöscht.</p>`, [
     { label: 'Abbrechen', onClick: closeModal },
@@ -586,3 +641,299 @@ function renderPlan() {
 }
 /* Symbol „Planung vorhanden" im Stundenplan */
 const PLAN_DOC_SVG = `<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"><path d="M3.6 1.6h5.6l3.2 3.2v9.6H3.6z"/><path d="M9 1.6v3.4h3.4"/><path d="M5.6 8h4.8M5.6 10.6h4.8"/></svg>`;
+
+/* ============================================================
+   Export, Import und Druck der Planung
+   ------------------------------------------------------------
+   Umfang: ganzer Kurs, eine Einheit oder „Ohne Einheit".
+   JSON: { _format, app: 'Pult', type: 'planung', version: 1, exported,
+           course: { id, subject, className }, units: [...], plans: [...] }
+   _format beschreibt den Aufbau in Worten (JSON kennt keine Kommentare) —
+   für Menschen und als Vorlage für ein LLM; der Import liest nur units und
+   plans. Auch ohne Planung entsteht eine Datei (leere Vorlage).
+   Die Datei enthält keine Schülerdaten. Beim Import entstehen neue
+   Einheiten und Stunden im gewählten Kurs; Termine werden übernommen
+   (belegte oder nicht im Stundenplan stehende werden zu Entwürfen) oder
+   alles kommt als Entwurf.
+   ============================================================ */
+function sortedUnits(courseId) {
+  return courseUnits(courseId).slice().sort((a, b) =>
+    (a.from || '9999').localeCompare(b.from || '9999') || (a.created || '').localeCompare(b.created || ''));
+}
+/* Einheiten und Stunden eines Umfangs: 'all' | '_loose' | Einheiten-ID */
+function planScopeData(c, scope) {
+  const units = sortedUnits(c.id);
+  const plans = coursePlans(c.id).slice().sort(planSort);
+  const loose = plans.filter(p => !p.unitId || !getUnit(p.unitId));
+  if (scope === '_loose') return { units: [], plans: loose, loose };
+  const u = units.find(x => x.id === scope);
+  if (u) return { units: [u], plans: plans.filter(p => p.unitId === u.id), loose: [] };
+  return { units, plans, loose };
+}
+function planScopeLabel(c, scope) {
+  if (scope === '_loose') return 'Ohne Einheit';
+  const u = getUnit(scope);
+  return u && u.courseId === c.id ? u.title || 'Einheit' : 'Ganzer Kurs';
+}
+function planScopeSelect(c, cur) {
+  const units = sortedUnits(c.id);
+  const hasLoose = coursePlans(c.id).some(p => !p.unitId || !getUnit(p.unitId));
+  return `<select id="pxScope">
+    <option value="all">Ganzer Kurs</option>
+    ${units.map(u => `<option value="${u.id}" ${cur === u.id ? 'selected' : ''}>Einheit: ${esc(u.title || 'Einheit')}</option>`).join('')}
+    ${hasLoose ? `<option value="_loose" ${cur === '_loose' ? 'selected' : ''}>Stunden ohne Einheit</option>` : ''}
+  </select>`;
+}
+/* Beschreibung des Dateiaufbaus, steht in jeder Exportdatei */
+function planungFormat() {
+  const html = 'als HTML. Erlaubt: <p>, <div>, <h3>, <h4>, <ul>, <ol>, <li>, <b>, <i>, <u>, <br> und farbiger Text mit <span style="color:#…"> ('
+    + RT_COLORS.filter(([c]) => c !== RT_NO_COLOR).map(([c, n]) => `${n} ${c}`).join(', ') + '). Alles andere wird beim Import zu reinem Text. "" = leer.';
+  return {
+    hinweis: 'Unterrichtsplanung aus Pult. Felder, die mit _ beginnen, sind nur Erklärung und werden beim Import ignoriert. '
+      + 'Eingelesen werden nur "units" (Einheiten) und "plans" (Stunden); Pult. vergibt beim Import neue IDs. '
+      + 'Import: Planung → Drucken / Export → Aus Datei importieren.',
+    units: {
+      id: 'Frei wählbarer Text, z. B. "u1". Stunden verweisen über "unitId" darauf.',
+      title: 'Titel der Einheit, z. B. "Lineare Funktionen" (Pflicht, höchstens 120 Zeichen).',
+      from: 'Beginn als "JJJJ-MM-TT" oder "".',
+      to: 'Ende als "JJJJ-MM-TT" oder "".',
+      body: 'Ziele und Notizen der Einheit ' + html,
+      created: 'Optional: Zeitpunkt der Anlage (ISO, z. B. "2026-11-13T10:00:00.000Z"); bestimmt die Reihenfolge von Einheiten ohne Beginn und von Entwürfen.',
+    },
+    plans: {
+      id: 'Optional, frei wählbar.',
+      unitId: 'Die "id" einer Einheit aus "units" — oder null für eine Stunde ohne Einheit.',
+      topic: 'Thema der Stunde (höchstens 120 Zeichen).',
+      body: 'Ablauf und Notizen der Stunde ' + html,
+      date: 'Termin als "JJJJ-MM-TT" — oder "" für einen Entwurf ohne Termin.',
+      period: 'Unterrichtsstunde als Zahl: 0 = 1. Stunde, 1 = 2. Stunde usw.; bei einer Doppelstunde die erste. null bei einem Entwurf.',
+      done: 'true = erledigt, sonst false.',
+      created: 'Optional, wie bei units.',
+    },
+    beispiel: {
+      units: [{ id: 'u1', title: 'Lineare Funktionen', from: '', to: '', body: '<p>Ziel: <b>Steigung</b> als Änderungsrate verstehen</p>' }],
+      plans: [
+        { unitId: 'u1', topic: 'Einführung Steigung', date: '', period: null, done: false,
+          body: '<h3>Einstieg</h3><p>Treppen-Bilder vergleichen</p><h3>Erarbeitung</h3><ul><li>Steigungsdreieck</li><li>Übung S. 54/3</li></ul>' },
+        { unitId: 'u1', topic: 'Übung', date: '', period: null, done: false, body: '' },
+      ],
+    },
+  };
+}
+const planFileName = (c, scope) => `planung-${rasterSlug(c.subject)}-${rasterSlug(c.className)}${scope !== 'all' ? '-' + rasterSlug(planScopeLabel(c, scope)) : ''}`;
+
+/* ---------- Menü ---------- */
+function openPlanungTransfer(c, scope) {
+  scope = scope || 'all';
+  const item = (k, title, sub) => `<button class="btn menu-btn" data-k="${k}">${title}<small>${sub}</small></button>`;
+  modal(`Planung — ${c.subject} ${c.className}`, `
+    <div class="field"><label>Umfang (für Drucken und Export)</label>${planScopeSelect(c, scope)}</div>
+    <div class="chip-list">
+      ${item('print', 'Drucken / PDF', 'Einheiten und Stunden mit Ablauf und Notizen als A4-Seiten')}
+      ${item('export', 'Als Datei exportieren (JSON)', 'Zum Sichern, Weitergeben oder für einen anderen Kurs')}
+      ${item('import', 'Aus Datei importieren (JSON)', 'Einheiten und Stunden aus einer exportierten Planung übernehmen')}
+    </div>
+    <div class="hint" style="margin-top:12px">Tipp: Die leere Exportdatei kann als Vorlage für ein LLM benutzt werden, um geplante Stunden ins richtige Format zu bringen.
+      <button class="px-link" id="pxTemplate">Leere Vorlage exportieren</button></div>
+    <input type="file" id="pxFile" accept="application/json,.json" hidden>`, [{ label: 'Schließen', onClick: closeModal }]);
+  document.getElementById('pxTemplate').onclick = () => exportPlanungTemplate(c);
+  const file = document.getElementById('pxFile');
+  file.onchange = () => { if (file.files[0]) readPlanungFile(file.files[0], c); };
+  document.querySelectorAll('.modal-body [data-k]').forEach(b => b.onclick = () => {
+    const sc = val('pxScope') || 'all';
+    if (b.dataset.k === 'print') openPlanungPrintOpts(c, sc);
+    else if (b.dataset.k === 'export') exportPlanung(c, sc);
+    else file.click();
+  });
+}
+
+/* ---------- Export ---------- */
+function exportPlanung(c, scope) {
+  const { units, plans } = planScopeData(c, scope);
+  const empty = !units.length && !plans.length;
+  const strip = x => { const o = Object.assign({}, x); delete o.courseId; return o; };
+  const payload = {
+    _format: planungFormat(),
+    app: 'Pult', type: 'planung', version: 1, exported: new Date().toISOString(),
+    course: { id: c.id, subject: c.subject, className: c.className },
+    units: units.map(strip), plans: plans.map(strip),
+  };
+  closeModal();
+  saveFile(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }), planFileName(c, scope) + (empty ? '-vorlage' : '') + '.json')
+    .then(ok => { if (ok) toast(empty ? 'Leere Vorlage exportiert.' : `Exportiert: ${units.length} ${units.length === 1 ? 'Einheit' : 'Einheiten'}, ${plans.length} ${plans.length === 1 ? 'Stunde' : 'Stunden'}.`); });
+}
+
+/* leere Vorlage: nur Aufbau und Beispiel, keine Einheiten und Stunden */
+function exportPlanungTemplate(c) {
+  const payload = { _format: planungFormat(), app: 'Pult', type: 'planung', version: 1, exported: new Date().toISOString(),
+    course: { id: c.id, subject: c.subject, className: c.className }, units: [], plans: [] };
+  closeModal();
+  saveFile(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }), `planung-vorlage-${rasterSlug(c.subject)}-${rasterSlug(c.className)}.json`)
+    .then(ok => { if (ok) toast('Leere Vorlage exportiert.'); });
+}
+
+/* ---------- Import ---------- */
+const PL_ISO = /^\d{4}-\d{2}-\d{2}$/;
+function readPlanungFile(file, c) {
+  file.text().then(txt => {
+    let parsed;
+    try { parsed = JSON.parse(txt); } catch (e) { parsed = null; }
+    if (!parsed || (parsed.type && parsed.type !== 'planung') || !Array.isArray(parsed.plans) && !Array.isArray(parsed.units))
+      return toast('Die Datei ist keine exportierte Planung.');
+    parsed.units = Array.isArray(parsed.units) ? parsed.units.filter(u => u && typeof u === 'object') : [];
+    parsed.plans = Array.isArray(parsed.plans) ? parsed.plans.filter(p => p && typeof p === 'object') : [];
+    if (!parsed.units.length && !parsed.plans.length) return toast('Die Datei enthält keine Einheiten oder Stunden — „units“ und „plans“ sind leer.');
+    confirmPlanungImport(parsed, c);
+  }, () => toast('Die Datei konnte nicht gelesen werden.'));
+}
+function confirmPlanungImport(parsed, c) {
+  const src = parsed.course || {};
+  const nU = parsed.units.length, nP = parsed.plans.length;
+  const dated = parsed.plans.filter(p => PL_ISO.test(p.date || '')).length;
+  let mode = src.id && src.id === c.id && dated ? 'keep' : 'drafts';
+  const from = [src.subject, src.className].filter(Boolean).join(' ');
+  modal('Planung importieren', `
+    <p>${nU} ${nU === 1 ? 'Einheit' : 'Einheiten'} und ${nP} ${nP === 1 ? 'Stunde' : 'Stunden'}${from ? ` aus <b>${esc(from)}</b>` : ''}${PL_ISO.test(String(parsed.exported || '').slice(0, 10)) ? `, exportiert am ${fmtDate(parsed.exported.slice(0, 10))}` : ''}.</p>
+    <div class="field"><label>In Kurs</label><select id="piCourse">${data.courses.map(k => `<option value="${k.id}" ${k.id === c.id ? 'selected' : ''}>${esc(k.subject)} · ${esc(k.className)}</option>`).join('')}</select></div>
+    ${dated ? `<div class="field"><label>Termine</label>${pdSeg('piMode', [['keep', 'Übernehmen'], ['drafts', 'Alles als Entwurf']], mode)}
+      <div class="hint">„Übernehmen“: Stunden behalten Datum und Stunde; ist der Termin schon belegt oder hat der Kurs dann keinen Unterricht, wird die Stunde ein Entwurf. „Als Entwurf“ passt z. B. für ein neues Schuljahr.</div></div>` : ''}
+    <div class="hint">Vorhandene Planungen bleiben unverändert; alles Importierte kommt dazu.</div>`, [
+    { label: 'Abbrechen', onClick: closeModal },
+    { label: 'Importieren', cls: 'primary', onClick: () => {
+      const target = getCourse(val('piCourse')) || c;
+      const r = importPlanung(parsed, target, dated && mode === 'keep');
+      closeModal();
+      go({ name: 'planung', courseId: target.id });
+      toast(`Importiert: ${r.units} ${r.units === 1 ? 'Einheit' : 'Einheiten'}, ${r.plans} ${r.plans === 1 ? 'Stunde' : 'Stunden'}`
+        + (r.clashed ? ` — ${r.clashed} als Entwurf (Termin belegt oder nicht im Stundenplan).` : '.'));
+    }},
+  ]);
+  if (dated) pdBindSeg('piMode', v => mode = v);
+}
+function importPlanung(parsed, target, keepDates) {
+  const str = (v, max) => String(v == null ? '' : v).slice(0, max);
+  const now = new Date().toISOString();
+  const idMap = new Map();
+  if (!Array.isArray(data.units)) data.units = [];
+  parsed.units.forEach(u => {
+    const rec = {
+      id: uid(), courseId: target.id, title: str(u.title, 120).trim() || 'Einheit',
+      from: keepDates && PL_ISO.test(u.from || '') ? u.from : '', to: keepDates && PL_ISO.test(u.to || '') ? u.to : '',
+      body: richSanitize(str(u.body, 200000)), created: PL_ISO.test(String(u.created || '').slice(0, 10)) ? String(u.created) : now,
+    };
+    if (u.id != null) idMap.set(String(u.id), rec.id);
+    data.units.push(rec);
+  });
+  let clashed = 0;
+  parsed.plans.forEach(p => {
+    const fields = {
+      topic: str(p.topic, 120), body: richSanitize(str(p.body, 200000)),
+      unitId: p.unitId != null ? idMap.get(String(p.unitId)) || null : null,
+      done: keepDates ? !!p.done : false,
+      created: PL_ISO.test(String(p.created || '').slice(0, 10)) ? String(p.created) : now,
+    };
+    const per = Number(p.period);
+    if (keepDates && PL_ISO.test(p.date || '') && Number.isInteger(per) && per >= 0) {
+      /* nur Termine, an denen der Kurs laut Stundenplan Unterricht hat */
+      const slot = courseSlots(target.id, p.date, 12, 1).find(s => s.periods.includes(per));
+      if (!slot || plansAtSlot(slot).length) clashed++;
+      else { fields.date = slot.date; fields.period = slot.period; }
+    }
+    newPlan(target.id, fields);
+  });
+  save();
+  return { units: parsed.units.length, plans: parsed.plans.length, clashed };
+}
+
+/* ---------- Drucken ---------- */
+function openPlanungPrintOpts(c, scope) {
+  const o = pdOpts('planung', { body: true, unitDesc: true, done: true, drafts: true });
+  modal('Planung drucken', `
+    <div class="field"><label>Umfang</label>${planScopeSelect(c, scope)}</div>
+    <div class="check-list">
+      ${pdChk('body', 'Ablauf und Notizen', o.body, 'sonst nur Termine und Themen')}
+      ${pdChk('unitDesc', 'Ziele und Notizen der Einheiten', o.unitDesc)}
+      ${pdChk('done', 'Erledigte Stunden', o.done)}
+      ${pdChk('drafts', 'Entwürfe (ohne Termin)', o.drafts)}
+    </div>`, [
+    { label: '‹ Zurück', onClick: () => openPlanungTransfer(c, val('pxScope')) },
+    { label: 'Vorschau ›', cls: 'primary', onClick: () => {
+      pdReadChecks(o); pdKeep('planung', o);
+      const sc = val('pxScope') || 'all';
+      closeModal();
+      openPrintView({ title: `Planung — ${c.subject} ${c.className}`, landscape: false, css: PD_CSS + PL_PRINT_CSS, fit: PD_FIT,
+        pages: [planPrintPage(c, sc, o)], filename: planFileName(c, sc) });
+    }},
+  ]);
+}
+/* eine einzelne Stunde (von ihrer Seite aus) */
+function printSinglePlan(p) {
+  const c = getCourse(p.courseId); if (!c) return;
+  const u = p.unitId ? getUnit(p.unitId) : null;
+  openPrintView({ title: `Stunde — ${planTitle(p)}`, landscape: false, css: PD_CSS + PL_PRINT_CSS, fit: PD_FIT,
+    filename: `stunde-${rasterSlug(c.className)}-${rasterSlug(planTitle(p))}`,
+    pages: [`<section class="pp-sheet pd">
+      ${pdHead(`${pdCourseSub(c)}${u ? ' · ' + esc(u.title) : ''}`, esc(planTitle(p)), esc(planLabel(p, true)) + (p.done ? '<br>erledigt' : ''))}
+      <table class="pd-t pd-plan pd-plan-solo" data-split="0"><tbody>${planBodyRows(p.body) || '<tr><td class="pd-dim">Noch kein Ablauf notiert.</td></tr>'}</tbody></table>
+      ${pdFoot()}
+    </section>`] });
+}
+/* Ausarbeitung für den Druck: Schriftfarbe des Themes wird Schwarz */
+const planPrintHtml = html => richSanitize(html).replace(/color:\s*var\(--ink\)/g, 'color:inherit');
+/* Ausarbeitung in Tabellenzeilen je Absatz — so kann sie über Seiten umbrechen */
+function planBodyRows(html) {
+  const tpl = document.createElement('template');
+  tpl.innerHTML = planPrintHtml(html);
+  const rows = [];
+  let inline = '';
+  const flush = () => { if (inline.replace(/<br>/g, '').trim()) rows.push(inline); inline = ''; };
+  tpl.content.childNodes.forEach(n => {
+    if (n.nodeType === 1 && /^(P|DIV|H3|H4|UL|OL)$/.test(n.tagName)) { flush(); rows.push(n.outerHTML); }
+    else inline += n.nodeType === 1 ? n.outerHTML : esc(n.nodeValue || '');
+  });
+  flush();
+  return rows.map(r => `<tr><td class="pl-p-body">${r}</td></tr>`).join('');
+}
+function planPrintPage(c, scope, o) {
+  const { units, plans, loose } = planScopeData(c, scope);
+  const keep = p => (o.done || !p.done) && (o.drafts || p.date);
+  const row = p => `<tr class="${p.done ? 'pl-p-done' : ''}">
+      <td class="pl-p-when">${p.date ? esc(planLabel(p)) : '<span class="pd-dim">Entwurf</span>'}</td>
+      <td><div class="pl-p-topic">${esc(planTitle(p))}</div>${o.body && p.body ? `<div class="pl-p-body">${planPrintHtml(p.body)}</div>` : ''}</td>
+    </tr>`;
+  const group = (title, meta, desc, list) => `<tr class="pl-p-unit"><td colspan="2">${title}${meta ? `<small>${meta}</small>` : ''}
+      ${desc ? `<div class="pl-p-udesc pl-p-body">${desc}</div>` : ''}</td></tr>
+    ${list.length ? list.map(row).join('') : '<tr><td colspan="2" class="pd-dim">Keine Stunden.</td></tr>'}`;
+  let count = 0;
+  const groups = units.map(u => {
+    const list = plans.filter(p => p.unitId === u.id && keep(p));
+    count += list.length;
+    const range = [u.from ? fmtDate(u.from) : '', u.to ? fmtDate(u.to) : ''].filter(Boolean).join(' – ');
+    return group(esc(u.title || 'Einheit'), range, o.unitDesc && u.body ? planPrintHtml(u.body) : '', list);
+  });
+  const looseList = loose.filter(keep);
+  if (looseList.length) { count += looseList.length; groups.push(group('Ohne Einheit', '', '', looseList)); }
+  return `<section class="pp-sheet pd">
+    ${pdHead(pdCourseSub(c), scope === 'all' ? 'Unterrichtsplanung' : esc(planScopeLabel(c, scope)), `${count} ${count === 1 ? 'Stunde' : 'Stunden'}`)}
+    <table class="pd-t pd-plan" data-split="0">
+      <thead><tr><th class="pl-p-when">Termin</th><th>Thema · Ablauf und Notizen</th></tr></thead>
+      <tbody>${groups.join('') || '<tr><td colspan="2" class="pd-dim">Noch nichts geplant.</td></tr>'}</tbody>
+    </table>
+    ${pdFoot()}
+  </section>`;
+}
+const PL_PRINT_CSS = `
+table.pd-plan th, table.pd-plan td { text-align: left; vertical-align: top; }
+table.pd-plan .pl-p-when { white-space: nowrap; width: 1%; font-size: 7.4pt; }
+table.pd-plan tr.pl-p-unit td { background: #e2efec; font-weight: 700; font-size: 9pt; }
+table.pd-plan tr.pl-p-unit small { font-weight: 500; color: #555; font-size: 7.4pt; margin-left: 2mm; }
+.pl-p-udesc { font-weight: 400; font-size: 7.6pt; margin-top: 0.8mm; }
+.pl-p-topic { font-weight: 700; font-size: 8.6pt; }
+tr.pl-p-done .pl-p-topic::after { content: ' ✓'; color: #2f8a6b; }
+.pl-p-body { margin-top: 0.6mm; }
+.pl-p-body h3, .pl-p-body h4 { font-size: 8.6pt; margin: 1.2mm 0 0.4mm; }
+.pl-p-body ul, .pl-p-body ol { margin: 0.4mm 0; padding-left: 4.5mm; }
+.pl-p-body p { margin: 0; }
+table.pd-plan-solo td { border: none; padding: 0.4mm 0; font-size: 9pt; }
+table.pd-plan-solo h3, table.pd-plan-solo h4 { font-size: 10pt; }
+`;

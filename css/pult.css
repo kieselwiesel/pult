@@ -129,6 +129,9 @@ main {
 }
 .page-head h1 { font-size: 26px; }
 .page-head .sub { color: var(--ink-soft); font-size: 14px; margin-top: 2px; }
+.tt-weeknav { display: inline-flex; gap: 4px; }
+.tt-weeknav .btn.small { min-width: 34px; padding: 0 8px; font-size: 17px; }
+.tt-weeknav .btn[disabled] { opacity: .4; cursor: default; }
 
 /* ---------- Buttons ---------- */
 .btn {
@@ -696,6 +699,12 @@ td.tt-cell.tt-editable.tt-today { background: var(--today, #eef6f2); }
 /* ---------- Willkommen (willkommen.js) ---------- */
 a.btn { text-decoration: none; }
 .notice.wl-warn { border-style: solid; border-color: var(--amber); color: var(--ink); }
+.browser-warn { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.browser-warn .browser-warn-t { flex: 1; min-width: 220px; line-height: 1.45; }
+.browser-warn .btn { flex: none; }
+.topbar-test { appearance: none; font: inherit; font-size: 12px; font-weight: 700; letter-spacing: .02em; cursor: pointer;
+  padding: 3px 9px; border-radius: 999px; border: none; background: var(--amber); color: #fff; white-space: nowrap; }
+@media (max-width: 700px) { .topbar-test { font-size: 0; padding: 0; width: 12px; height: 12px; background: var(--amber); } }
 .notice.wl-ok { border-style: solid; border-color: var(--accent); color: var(--ink); }
 .wl-small { font-size: 13px; color: var(--ink-faint); margin-top: 8px; line-height: 1.45; }
 .wl-steps { border: 1px solid var(--line-soft); border-radius: var(--radius); padding: 10px 12px; margin-bottom: 8px; background: var(--card-2); }
@@ -1161,6 +1170,10 @@ html.is-dark .pl-course.active { background: color-mix(in srgb, var(--c-bar) 24%
 button.pl-slot-topic { appearance: none; border: none; background: none; font: inherit; font-weight: 650; color: var(--ink); cursor: pointer; padding: 4px 0; display: flex; flex-direction: column; }
 button.pl-slot-topic small { font-weight: 500; font-size: 12px; color: var(--ink-faint); }
 .pl-slot .btn { flex: none; }
+.pl-move { flex: none; display: inline-flex; gap: 4px; }
+.px-link { appearance: none; border: none; background: none; font: inherit; font-weight: 650; color: var(--accent-ink); cursor: pointer; padding: 2px 0; display: block; margin-top: 4px; }
+.pl-move .btn.small { min-width: 34px; padding: 0 8px; font-size: 16px; }
+.pl-move .btn[disabled] { opacity: .35; cursor: default; }
 @media (max-width: 560px) { .pl-slot { flex-wrap: wrap; } .pl-slot-when { width: 100%; } }
 .pl-unit { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; margin-bottom: 12px; box-shadow: var(--shadow); }
 .pl-unit.pl-loose { background: var(--card-2); box-shadow: none; }

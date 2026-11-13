@@ -122,7 +122,7 @@ function setStundenplan(body) {
     abWrap.style.display = wantAB ? '' : 'none';
     data.timetable.abWeeks = wantAB;
     if (wantAB) abSetCurrentWeek(Number(abWeek.value) || 1);
-    planWeek = null;                       // Stundenplan wieder auf die laufende Woche
+    planWeek = 0;                          // Stundenplan wieder auf die laufende Woche
     setSaved();
   };
   abSel.onchange = applyAB;

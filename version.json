@@ -6,22 +6,10 @@
       "version": "1.1.0",
       "date": "2026-11-13",
       "changes": [
-        "Neue Navigation: Kurse, Noten, Planung, Todos, Termine — „Noten“ ist die bisherige Kursübersicht mit den Notentabellen",
-        "Kurse: je Kurs ein Dashboard mit nächster und letzter Stunde samt Planung, Kursschnitt, Notenspiegel, Kursschnitt je Leistung, Todos, Terminen, Kursnotizen, Einsammel-Listen und Hausaufgaben — die Karten ordnen sich als Mosaik",
-        "Notizen zeigen zunächst nur die erste Zeile, Antippen klappt sie auf; „Ausblenden“ nimmt eine Notiz aus dem Dashboard, im Notizfenster rutscht sie nach unten",
-        "Planung: je Kurs Einheiten und Stunden mit Thema und formatiertem Text (Überschrift, fett, kursiv, Liste, Farbe); eine Stunde ist ein Entwurf oder einer konkreten Stunde zugeordnet, Doppelstunden werden erkannt; nur die aktuelle Einheit zeigt ihre offenen Stunden, alle übrigen stehen unter „Mehr anzeigen“",
-        "Planung: „Nach hinten verschieben“ — die Stunde und die folgenden rücken je eine Stunde weiter, bis zur nächsten freien; belegte Stunden lassen sich einschieben oder ersetzen; Haken für erledigt",
-        "Stundenplan: Stunden mit Planung tragen rechts ein Dokument-Symbol, das die Planung öffnet; ein Klick auf die Stunde führt weiter zu den Noten",
-        "Suche findet auch Einheiten und Stunden der Planung",
-        "Backup: enthält jetzt auch die Schuljahres-Archive (auch verschlüsselt); beim Einlesen kommen sie zu den vorhandenen dazu",
-        "Backup einlesen: wahlweise „Als Archiv ablegen“ — der aktuelle Bestand bleibt, das Backup lässt sich unter Einstellungen → Daten ansehen",
-        "Pseudonyme Backups sind gekennzeichnet; beim Einlesen erscheint eine Warnung",
-        "„Code vergessen“: mit einer Backup-Datei dieser Daten entsperren und einen neuen Code festlegen — die Daten bleiben; auch ein älteres oder verschlüsseltes Backup genügt",
-        "„Code vergessen“ → Zurücksetzen setzt die App-Sperre jetzt zuverlässig zurück und löscht auch die internen Sicherungsstände",
-        "App-Sperre: Beim Drehen des iPads war hinter der Sperre teils ein Streifen der App zu sehen — solange gesperrt ist, bleibt die App jetzt unsichtbar",
-        "Ältere oder unvollständige Backups werden beim Einlesen ergänzt — z. B. ließ sich mit der Beispieldatei keine HA-Erhebung speichern",
-        "Nach dem Einlesen zählt die Backup-Erinnerung ab dem Datum der Datei"
-      ]
+        "Neue Navigation: Kurse, Noten, Planung, Todos, Termine",
+        "Unter Planung kann nun auch Unterrichtsplanung hinterlegt werden",
+        "Auf dem neuen Kurs-Dashboard hat man sämtliche Informationen zu einem Kurs zur Hand."
+     ]
     },
     {
       "version": "1.0.12",

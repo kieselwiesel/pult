@@ -8,6 +8,10 @@
 
    Erneut aufrufbar unter Einstellungen → Über Pult.
 
+   Läuft Pult. nur im Browser-Tab, zeigen die Startseite einen Warnhinweis
+   und die Kopfzeile ein Schild „Testumgebung“ — beide öffnen die Anleitung
+   zum Installieren (openInstallGuide).
+
    Wird vor pult.js geladen: hier stehen nur Definitionen.
    ============================================================ */
 'use strict';
@@ -33,11 +37,10 @@ function maybeShowWelcome() {
   openWelcome();
 }
 
-function openWelcome() {
+/* Anleitung zum Installieren als Web-App (Willkommen und Hinweis „Testumgebung“) */
+function installGuideHtml() {
   const apple = isAppleTouch(), android = isAndroid();
-  const install = isStandalone()
-    ? `<div class="notice wl-ok"><b>Pult. läuft als Web-App.</b> Die Daten bleiben dauerhaft auf diesem Gerät, auch offline. Sichere trotzdem regelmäßig ein Backup (Einstellungen → Daten).</div>`
-    : `<div class="notice wl-warn"><b>Pult. funktioniert nur als Web-App.</b> Im normalen Browser-Tab darf der Browser die Daten löschen, wenn die Seite einige Tage nicht geöffnet wurde. Als Web-App vom Home-Bildschirm bleiben sie dauerhaft auf dem Gerät, und Pult. läuft auch offline.
+  return `<div class="notice wl-warn"><b>Pult. funktioniert nur als Web-App.</b> Im normalen Browser-Tab darf der Browser die Daten löschen, wenn die Seite einige Tage nicht geöffnet wurde. Als Web-App vom Home-Bildschirm bleiben sie dauerhaft auf dem Gerät, und Pult. läuft auch offline.
         <div class="wl-small">Browser-Tab und Web-App haben getrennte Daten — trage erst in der installierten Web-App etwas ein.</div></div>
       <details class="wl-steps" ${apple || !android ? 'open' : ''}><summary>iPad (iPadOS)</summary>
         <ol>
@@ -55,6 +58,36 @@ function openWelcome() {
         </ol>
         ${installPrompt ? '<button class="btn small" id="wlInstall">Jetzt installieren</button>' : ''}</details>
       <div class="wl-small">Am Computer: in Chrome oder Edge über das Installieren-Symbol in der Adressleiste, in Safari (Mac) über Ablage → Zum Dock hinzufügen.</div>`;
+}
+function bindInstallButton() {
+  const inst = document.getElementById('wlInstall');
+  if (inst) inst.onclick = async () => {
+    const p = installPrompt; installPrompt = null; inst.remove();
+    try { await p.prompt(); } catch (e) {}
+  };
+}
+function openInstallGuide() {
+  modal('Pult. als Web-App installieren', installGuideHtml(), [{ label: 'Verstanden', cls: 'primary', onClick: closeModal }]);
+  bindInstallButton();
+}
+
+/* Warnhinweis auf der Startseite, solange Pult. im Browser-Tab läuft */
+function browserWarnHtml() {
+  if (isStandalone()) return '';
+  return `<div class="notice wl-warn browser-warn" role="note">
+    <span class="browser-warn-t"><b>Nur zum Testen:</b> Pult. läuft gerade im Browser. Hier kann der Browser die Daten nach einigen Tagen löschen — nutze diese Ansicht nur als Testumgebung. Für die echte Nutzung installiere Pult. als Web-App.</span>
+    <button class="btn small" id="browserWarnGo">Anleitung</button>
+  </div>`;
+}
+function bindBrowserWarn() {
+  const b = document.getElementById('browserWarnGo');
+  if (b) b.onclick = openInstallGuide;
+}
+
+function openWelcome() {
+  const install = isStandalone()
+    ? `<div class="notice wl-ok"><b>Pult. läuft als Web-App.</b> Die Daten bleiben dauerhaft auf diesem Gerät, auch offline. Sichere trotzdem regelmäßig ein Backup (Einstellungen → Daten).</div>`
+    : installGuideHtml();
 
   const demo = data.meta.demo ? `
     <div class="wl-demo">
@@ -72,11 +105,7 @@ function openWelcome() {
     { label: 'Verstanden', cls: 'primary', onClick: closeModal },
   ]);
 
-  const inst = document.getElementById('wlInstall');
-  if (inst) inst.onclick = async () => {
-    const p = installPrompt; installPrompt = null; inst.remove();
-    try { await p.prompt(); } catch (e) {}
-  };
+  bindInstallButton();
 }
 
 /* Beispieldaten löschen. Einstellungen (Darstellung, Vorgaben, Druck …) und

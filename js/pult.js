@@ -1280,8 +1280,11 @@ function renderTopbarRight() {
   const lockBtn = lockCfg.enabled
     ? `<button class="icon-btn topbar-lock" id="btnLock" title="Jetzt sperren" aria-label="App sperren">${LOCK_SVG}</button>` : '';
   const dot = updateInfo ? '<span class="upd-dot" title="Update verfügbar"></span>' : '';
-  el.innerHTML = `<button class="icon-btn topbar-search" id="btnSearch" title="Suchen (⌘K)" aria-label="Suchen">${SEARCH_SVG}</button>${lockBtn}<button class="btn ghost small topbar-settings${active}" id="btnSettings">Einstellungen${dot}</button>`;
+  const test = isStandalone() ? ''
+    : '<button class="topbar-test" id="btnTestEnv" title="Pult. läuft im Browser — nur zum Testen. Antippen für die Anleitung zum Installieren." aria-label="Testumgebung — Anleitung zum Installieren">Testumgebung</button>';
+  el.innerHTML = `${test}<button class="icon-btn topbar-search" id="btnSearch" title="Suchen (⌘K)" aria-label="Suchen">${SEARCH_SVG}</button>${lockBtn}<button class="btn ghost small topbar-settings${active}" id="btnSettings">Einstellungen${dot}</button>`;
   document.getElementById('btnSearch').onclick = openSearch;
+  if (test) document.getElementById('btnTestEnv').onclick = openInstallGuide;
   document.getElementById('btnSettings').onclick = () => go({ name: 'settings', setPage: null });
   if (lockCfg.enabled) document.getElementById('btnLock').onclick = () => lockNow(false);
 }
@@ -1355,7 +1358,7 @@ function renderCourses() {
    Startseite — Stundenplan + „Heute"
    ============================================================ */
 let planEdit = false;   // Stundenplan-Bearbeitungsmodus
-let planWeek = null;    // im A/B-Plan angezeigte Woche (1|2); null = die laufende
+let planWeek = 0;       // angezeigte Woche relativ zur laufenden (0 = diese, -1 = vorige, 1 = nächste …)
 
 /* kurzer, unaufdringlicher Text zum letzten Backup */
 function backupAgeText() {
@@ -1370,11 +1373,12 @@ function backupAgeText() {
 function renderHome() {
   const ab = abActive();
   const curWeek = ab ? abWeekOf() : 0;
-  const week = ab ? (planWeek === 1 || planWeek === 2 ? planWeek : curWeek) : 0;
-  /* die gezeigte Woche ist entweder die laufende oder die darauffolgende */
+  if (!Number.isInteger(planWeek)) planWeek = 0;
+  /* gezeigte Woche: die laufende, verschoben um planWeek Wochen */
   const monday = mondayOf();
-  if (ab && week !== curWeek) monday.setDate(monday.getDate() + 7);
-  const wdToday = ab && week !== curWeek ? 0 : todayWeekday();
+  monday.setDate(monday.getDate() + 7 * planWeek);
+  const week = ab ? abWeekOf(dateToISO(monday)) : 0;
+  const wdToday = planWeek ? 0 : todayWeekday();
   const periods = data.timetable.periods || [];
   const ferien = weeksUntil(data.meta.ferienDatum);
   const zeugnis = weeksUntil(data.meta.zeugnisDatum);
@@ -1435,8 +1439,12 @@ function renderHome() {
 
   const hasLessons = (data.timetable.lessons || []).length > 0;
   const wdReal = todayWeekday();
-  const todayLabel = (wdReal ? WEEKDAYS_LONG[wdReal] + ', ' + fmtDateLong(todayISO()) : 'Wochenende — ' + fmtDateLong(todayISO()))
-    + (ab ? ` · Woche ${AB_LABEL[curWeek]}` : '');
+  const rel = planWeek === 1 ? 'Nächste Woche' : planWeek === -1 ? 'Letzte Woche'
+    : planWeek > 0 ? `In ${planWeek} Wochen` : `Vor ${-planWeek} Wochen`;
+  const todayLabel = planWeek
+    ? `${rel} · ${fmtDate(isoForWeekday(monday, 1))} – ${fmtDateLong(isoForWeekday(monday, 5))}` + (ab ? ` · Woche ${AB_LABEL[week]}` : '')
+    : (wdReal ? WEEKDAYS_LONG[wdReal] + ', ' + fmtDateLong(todayISO()) : 'Wochenende — ' + fmtDateLong(todayISO()))
+      + (ab ? ` · Woche ${AB_LABEL[curWeek]}` : '');
   const weekTabs = ab ? `
     <div class="tabs">
       <button class="tab ${week===1?'active':''}" data-tw="1">Woche A${curWeek===1?' <span class="tt-now">jetzt</span>':''}</button>
@@ -1444,6 +1452,7 @@ function renderHome() {
     </div>` : '';
 
   app().innerHTML = `
+    ${browserWarnHtml()}
     ${updateBannerHtml()}
     <section class="dash">
       <div class="dash-card clickable" id="dashFerien">
@@ -1466,6 +1475,11 @@ function renderHome() {
     <div class="page-head">
       <div><h1>Stundenplan</h1><div class="sub">${todayLabel}</div></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <span class="tt-weeknav">
+          <button class="btn small" id="btnWeekPrev" title="Vorherige Woche" aria-label="Vorherige Woche">‹</button>
+          <button class="btn small ${planWeek ? 'primary' : ''}" id="btnWeekNow" title="Zur aktuellen Woche" aria-label="Zur aktuellen Woche" ${planWeek ? '' : 'disabled'}>○</button>
+          <button class="btn small" id="btnWeekNext" title="Nächste Woche" aria-label="Nächste Woche">›</button>
+        </span>
         <button class="btn small" id="btnPeriods">Zeiten</button>
         <button class="btn small ${planEdit ? 'primary' : ''}" id="btnPlanEdit">${planEdit ? 'Fertig' : 'Plan bearbeiten'}</button>
       </div>
@@ -1491,13 +1505,22 @@ function renderHome() {
 
   document.getElementById('backupHint').onclick = exportBackup;
   bindUpdateBanner();
+  bindBrowserWarn();
   document.getElementById('dashFerien').onclick = () => go({ name: 'settings', setPage: 'schuljahr' });
   document.getElementById('dashZeugnis').onclick = () => go({ name: 'settings', setPage: 'schuljahr' });
   document.getElementById('dashTodos').onclick = () => go({ name: 'todos' });
   document.getElementById('dashTermin').onclick = () => go({ name: 'termine' });
   document.getElementById('btnPeriods').onclick = openPeriodsEditor;
   document.getElementById('btnPlanEdit').onclick = () => { planEdit = !planEdit; renderHome(); };
-  app().querySelectorAll('.tab[data-tw]').forEach(t => t.onclick = () => { planWeek = +t.dataset.tw; renderHome(); });
+  document.getElementById('btnWeekPrev').onclick = () => { planWeek--; renderHome(); };
+  document.getElementById('btnWeekNext').onclick = () => { planWeek++; renderHome(); };
+  document.getElementById('btnWeekNow').onclick = () => { planWeek = 0; renderHome(); };
+  /* A/B-Reiter: zur Nachbarwoche mit dem anderen Buchstaben — in Richtung der laufenden Woche */
+  app().querySelectorAll('.tab[data-tw]').forEach(t => t.onclick = () => {
+    if (+t.dataset.tw === week) return;
+    planWeek += planWeek > 0 ? -1 : 1;
+    renderHome();
+  });
 
   app().querySelectorAll('.tt-lesson').forEach(b => b.onclick = () => {
     const day = +b.dataset.day, period = +b.dataset.period;
