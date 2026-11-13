@@ -191,6 +191,7 @@ function startNewYear(take, cls, o) {
     Object.assign(n, { id: c.id, scale: c.scale, weightHY1: c.weightHY1, weightHY2: c.weightHY2 });
     setCourseCats(n, courseCats(c).filter(k => k.std || k.weight > 0 || (c.cats || []).some(x => x.id === k.id)));
     n.students = c.students.filter(studentActive).map(s => ({ id: s.id, firstName: s.firstName, lastName: s.lastName, entry: '', exit: '', info: o.notes ? (s.info || '') : '' }));
+    sortStudents(n);
     if (o.seat && c.seating) n.seating = rasterClone(c.seating);
     if (o.seat && c.groups) n.groups = { rules: rasterClone(c.groups.rules || []), saved: [], current: null };
     return n;

@@ -11,7 +11,9 @@
         "Notentabelle und Notenverlauf: eigene Kategorien als weitere Ansicht; Rechenweg, individuelle Gewichtung und Ausdrucke zeigen alle Kategorien",
         "Kategorien ohne Note zählen nicht — ihr Anteil verteilt sich auf die übrigen; Kategorien mit 0 % bleiben sichtbar, zählen aber nicht",
         "Notentabelle: Standard ist jetzt „Gesamt und Neuestes zuerst“; die bisherige Anordnung heißt „Von links nach rechts“",
-        "Einstellungen → Über Pult.: auf Wunsch regelmäßig nach Updates suchen — beim Start und einmal am Tag; ein neuer Stand erscheint als Hinweis auf der Startseite (standardmäßig aus)"
+        "Einstellungen → Über Pult.: auf Wunsch regelmäßig nach Updates suchen — beim Start und einmal am Tag; ein neuer Stand erscheint als Hinweis auf der Startseite (standardmäßig aus)",
+        "Schülerlisten ordnen sich automatisch alphabetisch — nach Nachnamen, wenn alle einen haben, sonst nach Vornamen (auch in bestehenden Kursen)",
+        "Kurs bearbeiten: Knopf „Schüler:innen bearbeiten“; mit „Fertig“ geht es zurück ins Formular"
       ]
     },
     {

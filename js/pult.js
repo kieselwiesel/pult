@@ -88,10 +88,11 @@ const uid = () => Math.random().toString(36).slice(2, 9);
    data.meta.schema zählt, welche Umbauten der Daten schon gelaufen sind.
    Jede Migration läuft genau einmal — beim Start und nach dem Einlesen
    eines (älteren) Backups. Neue Umbauten hinten anhängen, SCHEMA erhöhen. */
-const SCHEMA = 2;
+const SCHEMA = 3;
 const MIGRATIONS = [
   { to: 1, run: () => migrateHaLog() },    // Hausaufgaben: 3-Zustands-Modell
   { to: 2, run: () => migrateRaster() },   // Bewertungsraster + Beispiel-Vorlagen
+  { to: 3, run: () => (data.courses || []).forEach(sortStudents) },   // Schülerlisten alphabetisch
 ];
 function runMigrations() {
   const from = Number(data.meta.schema) || 0;
@@ -870,6 +871,14 @@ function bindInfoBadges(root, c) {
   });
 }
 function studentName(s) { return `${s.firstName} ${s.lastName || ''}`.trim(); }
+/* Schülerliste alphabetisch: nach Nachname, wenn alle einen haben — sonst nach Vorname */
+function sortStudents(c) {
+  if (!c || !Array.isArray(c.students)) return;
+  const all = c.students.length > 0 && c.students.every(s => (s.lastName || '').trim());
+  const cmp = (a, b) => (a || '').localeCompare(b || '', 'de', { sensitivity: 'base' });
+  c.students.sort(all ? (a, b) => cmp(a.lastName, b.lastName) || cmp(a.firstName, b.firstName)
+                      : (a, b) => cmp(a.firstName, b.firstName) || cmp(a.lastName, b.lastName));
+}
 function openInfoView(c, s) {
   modal(`Kurzinfo — ${studentName(s)}`, `<div class="info-text">${esc(s.info)}</div>`, [
     { label: 'Bearbeiten', onClick: () => openInfoEdit(c, s) },
@@ -1579,11 +1588,11 @@ function renderTodos() {
       <button class="btn small danger" data-del="${t.id}">Löschen</button>
     </div>`;
   };
-  const openList = sorted.filter(t => !t.done).map(item).join('') || `<div class="notice">Keine offenen Todos. Trag oben etwas ein.</div>`;
+  const openList = sorted.filter(t => !t.done).map(item).join('') || `<div class="notice">Keine offenen Todos.</div>`;
   const doneList = sorted.filter(t => t.done);
 
   app().innerHTML = `
-    <div class="page-head"><div><h1>Todos</h1><div class="sub">Notizen und Aufgaben, unabhängig von Noten</div></div></div>
+    <div class="page-head"><div><h1>Todos</h1><div class="sub">Notizen und Aufgaben</div></div></div>
 
     <div class="calc-block">
       <div class="todo-add">
@@ -1756,7 +1765,7 @@ function renderCourse() {
 
   document.querySelectorAll('.tab').forEach(t => t.onclick = () => go({ hy: t.dataset.hy }));
   bindSegWithMore('viewSeg', v => go({ view: v }));
-  document.getElementById('btnStudents').onclick = () => openStudents(c);
+  document.getElementById('btnStudents').onclick = () => openStudents(c, null);
   document.getElementById('btnSeating').onclick = () => { seatPending = null; go({ name: 'seating', courseId: c.id, seatMode: initialSeatMode(c) }); };
   document.getElementById('btnZwischen').onclick = () => createZwischenstand(c);
   document.getElementById('btnMore').onclick = () => openMoreMenu(c);
@@ -2306,7 +2315,7 @@ function renderTable(c) {
   if (!c.students.length) {
     host.innerHTML = `<div class="empty-state"><p>Noch keine Schüler:innen in diesem Kurs.</p>
       <button class="btn primary" id="es1">+ Schüler:innen hinzufügen</button></div>`;
-    document.getElementById('es1').onclick = () => openStudents(c);
+    document.getElementById('es1').onclick = () => openStudents(c, null);
     return;
   }
 
@@ -3476,6 +3485,8 @@ function openCourseForm(course, draft) {
       <div class="field"><label>Fach</label><input id="fSubject" type="text" value="${esc(d.subject != null ? d.subject : c.subject)}" placeholder="z. B. Mathematik"></div>
       <div class="field"><label>Klasse / Kurs</label><input id="fClass" type="text" value="${esc(d.className != null ? d.className : c.className)}" placeholder="z. B. 9b oder EF"></div>
     </div>
+    ${editing ? `<div class="field"><label>Schüler:innen</label>
+      <div class="set-buttons"><button type="button" class="btn" id="fStudents">Schüler:innen bearbeiten (${c.students.length})</button></div></div>` : ''}
     <div class="field">
       <label>Notenskala (Eingabe & Anzeige)</label>
       <select id="fScale">
@@ -3539,6 +3550,9 @@ function openCourseForm(course, draft) {
   };
   const fh1 = document.getElementById('fH1'), fh2 = document.getElementById('fH2');
   fh1.oninput = () => { fh2.value = clamp(100 - (parseInt(fh1.value) || 0), 0, 100); };
+  /* zur Schülerliste und mit „Fertig" zurück — Eingaben im Formular bleiben erhalten */
+  const fs = document.getElementById('fStudents');
+  if (fs) fs.onclick = () => { const dr = pending(); openStudents(c, () => openCourseForm(course, dr)); };
 }
 function confirmDeleteCourse(c) {
   modal('Kurs löschen?', `<p>Der Kurs <b>${esc(c.subject)} ${esc(c.className)}</b> und alle zugehörigen Noten werden gelöscht.</p>`, [
@@ -3729,7 +3743,11 @@ function openSonstigeValues(c) {
 const scopeLabel = s => (s === 'allgemein' ? 'Allgemein' : catName(s));
 
 /* ---------- Schüler:innen verwalten ---------- */
-function openStudents(c) {
+/* back: wohin „Fertig" führt (z. B. zurück ins Kursformular). Nur beim
+   Öffnen von außen angeben; Aufrufe innerhalb der Liste behalten es. */
+let studentsBack = null;
+function openStudents(c, back) {
+  if (back !== undefined) studentsBack = back;
   const list = c.students.map(s => `
     <div class="chip">
       <div class="chip-main"><b>${esc(s.firstName)} ${esc(s.lastName||'')}${infoBadge(s)}</b>
@@ -3745,7 +3763,10 @@ function openStudents(c) {
       <button class="btn small" id="stAdd">+ Einzeln</button>
       <button class="btn small" id="stImport">Import (Liste / WebUntis)</button>
     </div>
-  `, [{ label: 'Fertig', cls: 'primary', onClick: () => { closeModal(); render(); } }]);
+  `, [{ label: 'Fertig', cls: 'primary', onClick: () => {
+    const b = studentsBack; studentsBack = null;
+    if (b) b(); else { closeModal(); render(); }
+  } }]);
   document.getElementById('stAdd').onclick = () => openStudentForm(c);
   document.getElementById('stImport').onclick = () => openImport(c);
   document.querySelectorAll('.info-i[data-info]').forEach(el => el.onclick = ev => {
@@ -3770,6 +3791,7 @@ function openStudents(c) {
     if (c.seating && c.seating.seats) {
       Object.keys(c.seating.seats).forEach(k => { if (c.seating.seats[k] === sId) delete c.seating.seats[k]; });
     }
+    sortStudents(c);   // ohne die Person haben evtl. jetzt alle einen Nachnamen
     commitChange(`Schüler:in „${s ? studentName(s) : '?'}" gelöscht (${n} ${n === 1 ? 'Note' : 'Noten'})`, snap, { courseId: c.id });
     save(); openStudents(c);
   });
@@ -3790,7 +3812,7 @@ function openStudentForm(c, id) {
       <textarea id="stI" placeholder="z. B. Nachteilsausgleich: 25 % Zeitzuschlag" style="min-height:64px">${esc(s.info||'')}</textarea>
       <div class="hint">Erscheint als „i" neben dem Namen — in der Notentabelle, bei Klassenarbeiten und im Sitzplan.</div>
     </div>
-    <div class="hint">Nur der Vorname ist Pflicht.</div>
+    <div class="hint">Nachnamen sind optional.</div>
   `, [
     { label: 'Abbrechen', onClick: () => openStudents(c) },
     { label: 'Speichern', cls: 'primary', onClick: () => {
@@ -3799,6 +3821,7 @@ function openStudentForm(c, id) {
       s.firstName = f; s.lastName = val('stL').trim(); s.entry = val('stE'); s.exit = val('stX');
       s.info = val('stI').trim();
       if (!editing) { s.id = uid(); c.students.push(s); }
+      sortStudents(c);
       save(); openStudents(c);
     }},
   ]);
@@ -3814,6 +3837,7 @@ function addStudents(c, entries) {
     c.students.push({ id: uid(), firstName: e.firstName, lastName: e.lastName || '', entry: e.entry || '', exit: e.exit || '', info: '' });
     added++;
   });
+  sortStudents(c);
   save();
   toast(`${added} hinzugefügt${skipped ? `, ${skipped} Duplikat(e) übersprungen` : ''}.`);
   openStudents(c);
