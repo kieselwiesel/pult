@@ -318,21 +318,21 @@ function setDaten(body) {
           <button class="btn" id="mBackupImport">Backup einlesen</button>
           <input type="file" id="mBackupFile" accept="application/json,.json" hidden>
         </div>
-        <div class="hint">${m.lastBackup ? 'Letztes Backup: ' + fmtDateLong(m.lastBackup) + '.' : 'Noch kein Backup gesichert.'} Die Daten liegen nur auf diesem Gerät — ein Backup als Datei ist die einzige Sicherung gegen Verlust.</div>
+        <div class="hint">${m.lastBackup ? 'Letztes Backup: ' + fmtDateLong(m.lastBackup) + '.' : 'Noch kein Backup gesichert.'} Die Daten liegen nur auf diesem Gerät — ein Backup als Datei ist die einzige Sicherung gegen Verlust. Es enthält auch die Schuljahres-Archive. Beim Einlesen lässt sich ein Backup ersetzen oder nur als Archiv ablegen.</div>
       </div>
       <div class="field"><label>Erinnern, wenn das letzte Backup älter ist als</label>
         <select id="mRemind">${[[3, '3 Tage'], [7, '1 Woche'], [14, '2 Wochen'], [30, '1 Monat'], [0, 'nie erinnern']].map(([v, l]) =>
           `<option value="${v}" ${backupRemindDays() === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
       </div>
       <details class="set-more"><summary>Pseudonymes Backup</summary>
-        <div class="hint">Namen werden durch Nummern ersetzt (je Kurs alphabetisch), Kurzinfos, Raster-Rückmeldungen und Notenprotokoll entfallen. Zum Teilen oder Ablegen ohne Namen — keine vollwertige Sicherung. Freitext in Notizen, Todos und Terminen bleibt.</div>
+        <div class="hint">Namen werden durch Nummern ersetzt (je Kurs alphabetisch), Kurzinfos, Raster-Rückmeldungen und Notenprotokoll entfallen. Zum Teilen oder Ablegen ohne Namen — keine vollwertige Sicherung, ohne Schuljahres-Archive. Freitext in Notizen, Todos, Terminen und der Planung bleibt.</div>
         <button class="btn small" id="mBackupPseudo" style="margin-top:8px">Pseudonym sichern</button>
       </details>
     </section>
 
     <section class="set-card">
       <h2>Interne Sicherungsstände</h2>
-      <div class="hint" style="margin-bottom:10px">Täglich automatisch sowie vor Updates, dem Einlesen eines Backups und dem Löschen. Die letzten ${SNAP_MAX} bleiben erhalten, Schuljahres-Archive dauerhaft. „Ansehen" öffnet einen Stand, ohne etwas zu verändern. Liegen auf diesem Gerät — ersetzen kein Backup als Datei.</div>
+      <div class="hint" style="margin-bottom:10px">Täglich automatisch sowie vor Updates, dem Einlesen eines Backups und dem Löschen. Die letzten ${SNAP_MAX} bleiben erhalten, Schuljahres-Archive dauerhaft. „Ansehen" öffnet einen Stand, ohne etwas zu verändern. Liegen auf diesem Gerät — ersetzen kein Backup als Datei; nur die Schuljahres-Archive sind darin enthalten.</div>
       <div id="snapList"><div class="cs-sub">Wird geladen …</div></div>
       <button class="btn small" id="mSnapNow" style="margin-top:10px">Jetzt Stand sichern</button>
     </section>

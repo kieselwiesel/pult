@@ -113,6 +113,10 @@ async function bioVerify() {
 function setAppInert(on) {
   ['app', 'modalBackdrop', 'backFab', 'printView', 'stage'].forEach(id => { const n = document.getElementById(id); if (n) n.inert = on; });
   document.querySelector('.topbar').inert = on;
+  /* Die App nicht nur überdecken, sondern unsichtbar machen (CSS „ls-active"):
+     Beim Drehen des iPads legt WebKit fixierte Ebenen teils erst nach der
+     Drehung neu an — ein Streifen ohne Sperre zeigte sonst die App dahinter. */
+  document.documentElement.classList.toggle('ls-active', on);
 }
 function closePinScreen() { if (pinCleanup) { pinCleanup(); pinCleanup = null; } }
 
@@ -206,7 +210,7 @@ function pinScreen({ mode, title, autoBio, onDone, onCancel }) {
   }
   function press(k) {
     if (k === 'cancel') { closePinScreen(); return onCancel && onCancel(); }
-    if (k === 'forgot') return forgotPin();
+    if (k === 'forgot') return forgotScreen();
     if (k === 'bio') return tryBio(false);
     if (busy || blockedLeft()) return;
     if (k === 'del') { entry = entry.slice(0, -1); return paint(); }
@@ -249,9 +253,123 @@ function requirePin(title, onOk) {
   if (!lockCfg.enabled) return onOk();
   pinScreen({ mode: 'verify', title, onDone: onOk });
 }
-function forgotPin() {
-  if (!confirm('Ohne Code lässt sich Pult. nicht entsperren.\n\nPult. zurücksetzen? Dabei werden ALLE Kurse, Noten und Einstellungen in diesem Browser gelöscht. Ein Backup kannst du danach wieder einlesen.')) return;
+/* ---------- Code vergessen ----------
+   Rückweg ohne Datenverlust: Eine Backup-Datei dieser Daten beweist, dass sie
+   dir gehören. Kurse, Schüler:innen, Todos … tragen zufällige interne IDs, die
+   nirgends angezeigt werden — sie stehen nur im Browser-Speicher und in den
+   Backups (Prüfung: backupProvesOwnership, sicherung.js). Passt das Backup,
+   wird ein neuer Code festgelegt; die Daten hier bleiben, wie sie sind — sie
+   sind ja neuer als das Backup. Ein älteres Backup genügt.
+   Grenze: Wer eine unverschlüsselte Backup-Datei in die Hände bekommt, kann
+   damit entsperren — lesen könnte er die Datei aber ohnehin. */
+function forgotScreen() {
+  closePinScreen();
+  pinMode = 'lock';                 // gilt weiter als gesperrt
+  setAppInert(true);
+  const bio = bioName();
+  const el = document.createElement('div');
+  el.className = 'lockscreen';
+  el.setAttribute('role', 'dialog'); el.setAttribute('aria-modal', 'true');
+  el.innerHTML = `
+    <div class="ls-inner ls-forgot">
+      <div class="ls-brand">Pult<span class="dot">.</span></div>
+      <div class="ls-title">Code vergessen</div>
+      <p class="ls-text">Wähle eine Backup-Datei dieser Daten — auch ein älteres Backup genügt. Danach legst du einen neuen Code fest. Die Daten hier bleiben, wie sie sind.</p>
+      <button class="btn primary ls-wide" data-f="file">Backup-Datei wählen …</button>
+      <input type="file" accept="application/json,.json" hidden>
+      <div class="ls-pw" style="display:none">
+        <input type="password" autocomplete="current-password" placeholder="Passwort des Backups" aria-label="Passwort des Backups">
+        <button class="btn primary ls-wide" data-f="pw">Entschlüsseln</button>
+        <button class="btn ls-wide" data-f="pk">Mit ${esc(bio)} entschlüsseln</button>
+      </div>
+      <div class="ls-msg" aria-live="polite"></div>
+      <p class="ls-text ls-small">Ohne Backup bleibt nur das Zurücksetzen — dabei wird alles in diesem Browser gelöscht.</p>
+      <button class="btn danger ls-wide" data-f="reset">Pult. zurücksetzen …</button>
+      <button class="ls-link" data-f="back">Zurück zur Code-Eingabe</button>
+    </div>`;
+  document.body.appendChild(el);
+
+  const $ = s => el.querySelector(s);
+  const msg = t => { $('.ls-msg').textContent = t; };
+  const file = $('input[type=file]'), pwBox = $('.ls-pw'), pwIn = pwBox.querySelector('input');
+  const show = (node, on) => { node.style.display = on ? '' : 'none'; };
+  let parsed = null, busy = false;
+
+  const check = r => {
+    const res = backupProvesOwnership(r && r.data, r && r.archives, parsed);
+    if (res === true) unlockWithNewCode(); else msg(res);
+  };
+  file.onchange = () => {
+    const f = file.files[0]; file.value = '';
+    if (!f) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      show(pwBox, false); parsed = null; msg('');
+      try { parsed = JSON.parse(reader.result); } catch (e) {}
+      if (!parsed || typeof parsed !== 'object') return msg('Das ist keine Pult-Backup-Datei.');
+      if (!parsed.encrypted) return check({ data: parsed.data || parsed, archives: parsed.archives });
+      if (!cryptoReady()) return msg('Verschlüsselte Backups gehen nur, wenn Pult. über https geöffnet ist.');
+      const types = backupKeyTypes(parsed);
+      const pw = types.includes('password'), pk = types.includes('passkey') && bioSupported();
+      if (!pw && !pk) return msg(`Mit ${bio} verschlüsselt — das geht in diesem Browser nicht.`);
+      show(pwBox, true); show(pwIn, pw); show($('[data-f=pw]'), pw); show($('[data-f=pk]'), pk);
+      msg('Das Backup ist verschlüsselt.');
+      if (pw) pwIn.focus();
+    };
+    reader.readAsText(f);
+  };
+  const decrypt = async how => {
+    if (busy || !parsed) return;
+    busy = true;
+    msg(how === 'pk' ? `Bitte mit ${bio} bestätigen …` : 'Wird entschlüsselt …');
+    let r = null;
+    try { r = how === 'pk' ? await decryptWithPasskey(parsed) : await decryptWithPassword(parsed, pwIn.value); }
+    catch (e) { msg(how === 'pk' ? 'Entschlüsseln hat nicht geklappt.' : 'Falsches Passwort oder beschädigte Datei.'); }
+    busy = false;
+    if (r && el.isConnected) check(r);
+  };
+  el.addEventListener('click', e => {
+    const b = e.target.closest('[data-f]'); if (!b) return;
+    const f = b.dataset.f;
+    if (f === 'back') return pinScreen({ mode: 'lock' });
+    if (f === 'reset') return resetForgotten();
+    if (f === 'file') return file.click();
+    if (f === 'pw' || f === 'pk') return decrypt(f);
+  });
+  pwIn.addEventListener('keydown', e => { if (e.key === 'Enter') decrypt('pw'); });
+
+  pinBio = null;
+  pinCleanup = () => {
+    el.remove();
+    pinMode = null; pinBio = null;
+    setAppInert(false);
+    lastActivity = Date.now();
+  };
+}
+/* Backup passt: Sperre ruht, bis ein neuer Code steht — sonst könnte Auto-Sperre
+   oder App-Wechsel währenddessen wieder den vergessenen Code verlangen.
+   Abbrechen lässt die Sperre aus. */
+function unlockWithNewCode() {
+  lockCfg.enabled = false; lockCfg.fails = 0; lockCfg.blockedUntil = 0; saveLock();
+  pinScreen({ mode: 'setup', title: 'Backup passt — neuen Code festlegen',
+    onDone: async pin => {
+      await setPin(pin);
+      lockCfg.enabled = true; lockCfg.lastActive = Date.now(); saveLock();
+      render(); toast('Entsperrt — der neue Code gilt.');
+    },
+    onCancel: () => {
+      lockCfg = LOCK_DEFAULT(); saveLock();
+      render(); toast('Entsperrt — die App-Sperre ist jetzt aus (Einstellungen → Sicherheit).');
+    },
+  });
+}
+async function resetForgotten() {
+  if (!confirm('Ohne Code lässt sich Pult. nicht entsperren.\n\nPult. zurücksetzen? Dabei werden ALLE Kurse, Noten, Einstellungen und internen Sicherungsstände samt Schuljahres-Archiven in diesem Browser gelöscht. Ein Backup als Datei kannst du danach wieder einlesen — die Archive sind darin enthalten.')) return;
+  /* auch im Speicher: Beim Neuladen meldet „visibilitychange" die Seite als
+     verborgen und schriebe die alte Sperre samt Code sonst gleich zurück */
+  lockCfg = LOCK_DEFAULT();
   try { localStorage.removeItem(STORE_KEY); localStorage.removeItem(LOCK_KEY); } catch (e) {}
+  await deleteSnapshotDb();   // sonst ließe sich alles über „Wiederherstellen" zurückholen
   location.reload();
 }
 
@@ -328,7 +446,7 @@ function lockSettingsHtml() {
             <button class="btn" id="lkChange">Code ändern</button>
             <button class="btn danger" id="lkOff">Sperre ausschalten</button>
           </div>
-          <div class="hint">Die Sperre ist ein Sichtschutz: Die Daten liegen weiterhin unverschlüsselt in diesem Browser. Wer den Code vergisst, kann Pult. nur zurücksetzen und ein Backup einlesen.</div>
+          <div class="hint">Die Sperre ist ein Sichtschutz: Die Daten liegen weiterhin unverschlüsselt in diesem Browser. Wer den Code vergisst, entsperrt mit einer Backup-Datei dieser Daten${lockCfg.credId ? ` oder mit ${bioName()}` : ''} — ohne beides bleibt nur das Zurücksetzen.</div>
         </div>
       </section>`;
 }

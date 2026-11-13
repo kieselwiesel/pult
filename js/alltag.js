@@ -51,7 +51,7 @@ setInterval(() => {
 const fold = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
 function openSearch() {
   modal('Suchen', `
-    <input id="srQ" type="search" placeholder="Name oder Kurs …" autocomplete="off">
+    <input id="srQ" type="search" placeholder="Name, Kurs oder Planung …" autocomplete="off">
     <div id="srRes" class="sr-res"></div>`, [{ label: 'Schließen', onClick: closeModal }]);
   const q = document.getElementById('srQ'), res = document.getElementById('srRes');
   let hits = [];
@@ -63,17 +63,25 @@ function openSearch() {
         if (fold(`${c.subject} ${c.className}`).includes(t)) hits.push({ kind: 'course', c });
         c.students.forEach(s => { if (fold(`${s.firstName} ${s.lastName}`).includes(t) || fold(`${s.lastName} ${s.firstName}`).includes(t)) hits.push({ kind: 'student', c, s }); });
       });
+      /* Planung: Einheiten und Stunden (Thema und Text) */
+      (data.units || []).forEach(u => { const c = getCourse(u.courseId); if (c && fold(`${u.title} ${richText(u.body)}`).includes(t)) hits.push({ kind: 'unit', c, u }); });
+      (data.lessonPlans || []).forEach(p => { const c = getCourse(p.courseId); if (c && fold(`${p.topic} ${richText(p.body)}`).includes(t)) hits.push({ kind: 'plan', c, p }); });
     }
-    res.innerHTML = hits.slice(0, 30).map((h, i) => h.kind === 'course'
-      ? `<button class="sr-hit" data-i="${i}"><b>${esc(h.c.subject)} ${esc(h.c.className)}</b><span>Kurs · ${h.c.students.length} Schüler:innen</span></button>`
-      : `<button class="sr-hit" data-i="${i}"><b>${esc(studentName(h.s))}</b><span>${esc(h.c.subject)} ${esc(h.c.className)}${studentActive(h.s) ? '' : ' · ausgetreten'}</span></button>`).join('')
+    const cn = c => `${esc(c.subject)} ${esc(c.className)}`;
+    res.innerHTML = hits.slice(0, 30).map((h, i) => `<button class="sr-hit" data-i="${i}">${
+      h.kind === 'course' ? `<b>${cn(h.c)}</b><span>Kurs · ${h.c.students.length} Schüler:innen</span>`
+      : h.kind === 'unit' ? `<b>${esc(h.u.title)}</b><span>Einheit · ${cn(h.c)}</span>`
+      : h.kind === 'plan' ? `<b>${esc(planTitle(h.p))}</b><span>Stunde · ${cn(h.c)} · ${esc(planLabel(h.p))}</span>`
+      : `<b>${esc(studentName(h.s))}</b><span>${cn(h.c)}${studentActive(h.s) ? '' : ' · ausgetreten'}</span>`}</button>`).join('')
       || (t ? '<div class="cs-sub">Nichts gefunden.</div>' : '<div class="cs-sub">Tipp: ⌘K öffnet die Suche von überall.</div>');
     res.querySelectorAll('.sr-hit').forEach(b => b.onclick = () => openHit(hits[+b.dataset.i]));
   };
   const openHit = h => {
     if (!h) return;
     closeModal();
-    if (h.kind === 'course') go({ name: 'course', courseId: h.c.id, hy: defaultHalfYear(h.c), view: 'simpel' });
+    if (h.kind === 'course') go({ name: 'kurs', courseId: h.c.id });
+    else if (h.kind === 'unit') go({ name: 'planung', courseId: h.c.id });
+    else if (h.kind === 'plan') go({ name: 'plan', courseId: h.c.id, planId: h.p.id });
     else go({ name: 'student', courseId: h.c.id, studentId: h.s.id });
   };
   q.oninput = run;
@@ -154,7 +162,7 @@ function openYearChange() {
       <input type="text" data-cls="${c.id}" value="${esc(nextClassName(c.className))}" aria-label="neue Klasse">
     </div>`).join('');
   modal('Neues Schuljahr', `
-    <div class="notice">Das bisherige Jahr wird vollständig als Archiv gesichert und bleibt unter <b>Einstellungen → Daten</b> zum Nachschauen erhalten. Zusätzlich vorher ein <b>Backup als Datei</b> sichern.</div>
+    <div class="notice">Das bisherige Jahr wird vollständig als Archiv gesichert und bleibt unter <b>Einstellungen → Daten</b> zum Nachschauen erhalten. Archive sind in jedem Backup als Datei enthalten. Zusätzlich vorher ein <b>Backup als Datei</b> sichern.</div>
     <div class="field"><label>Name des Archivs</label><input id="ycLabel" type="text" value="Schuljahr ${esc(label)}"></div>
     <div class="field"><label>Kurse übernehmen — mit Schüler:innen, ohne Noten</label>${rows || '<div class="cs-sub">Keine Kurse.</div>'}
       <div class="hint">Klasse rechts anpassen (z. B. 7c → 8c). Nicht angehakte Kurse gibt es nur noch im Archiv.</div></div>
@@ -215,6 +223,7 @@ async function viewArchive(id) {
   if (!archiveMode) archiveMode = { live: data, label: snap.label };
   archiveMode.label = snap.label;
   data = Object.assign(DEFAULT_DATA(), JSON.parse(snap.json));
+  runMigrations();   // ältere Archive ins aktuelle Format bringen — im Archivmodus wird dabei nichts gespeichert
   closeModal(); navStack = [];
   go({ name: 'courses' });
   renderArchiveBar();

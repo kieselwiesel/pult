@@ -27,7 +27,7 @@ const DEFAULT_DATA = () => ({
   weightOverride: {},  // weightOverride[studentId][hyKey] = wSchriftlich(0..100)
   manual: {},          // manual[studentId] = { g1, g2, end } manuelle Note (punkte)
   kaPoints: {},        // kaPoints[studentId][columnId][taskId] = erreichte Rohpunkte
-  notes: [],           // { id, courseId, studentId|null, date, text }
+  notes: [],           // { id, courseId, studentId|null, date, text, hidden } — hidden: nicht im Dashboard, im Notizfenster unten
   lists: [],           // { id, courseId, title, dueDate, status:{studentId:'offen'|'abgegeben'|'befreit'} }
   timetable: {         // Stundenplan (Mo–Fr)
     periods: DEFAULT_PERIODS(),   // [{ label, start, end }]
@@ -39,6 +39,8 @@ const DEFAULT_DATA = () => ({
   termine: [],         // { id, title, date, start, end, allDay, location, note, courseId|null, uid }
   history: [],         // Notenprotokoll, siehe unten — { id, at, label, courseId, changes[], undone }
   rubrics: [],         // Bewertungsraster-Vorlagen, siehe raster.js
+  units: [],           // Planung: Einheiten, siehe planung.js
+  lessonPlans: [],     // Planung: Stunden (Entwurf oder einem Termin zugeordnet)
 });
 
 /* Standard-Stundenraster (editierbar unter „Zeiten") */
@@ -95,11 +97,39 @@ const MIGRATIONS = [
   { to: 3, run: () => (data.courses || []).forEach(sortStudents) },   // Schülerlisten alphabetisch
 ];
 function runMigrations() {
+  normalizeData(data);
   const from = Number(data.meta.schema) || 0;
   if (from >= SCHEMA) return;              // aktuell — oder aus einer neueren Version: nichts anfassen
   MIGRATIONS.filter(m => m.to > from).forEach(m => m.run());
   data.meta.schema = SCHEMA;
   save();
+}
+/* Fehlende Felder mit Standardwerten ergänzen — für ältere oder unvollständige
+   Stände (Backup, Archiv, alter Browserstand). Läuft vor jeder Migration, also
+   beim Start, nach dem Einlesen und beim Ansehen eines Archivs. Vorhandenes
+   bleibt unangetastet; neue Felder in DEFAULT_DATA/newCourse sind damit
+   automatisch auch in alten Backups da. */
+function normalizeData(d) {
+  const def = DEFAULT_DATA();
+  Object.keys(def).forEach(k => { if (d[k] == null) d[k] = def[k]; });
+  d.meta = Object.assign(def.meta, d.meta);
+  d.timetable = Object.assign(def.timetable, d.timetable);
+  if (!Array.isArray(d.timetable.periods)) d.timetable.periods = DEFAULT_PERIODS();
+  if (!Array.isArray(d.timetable.lessons)) d.timetable.lessons = [];
+  if (!Array.isArray(d.courses)) d.courses = [];
+  d.courses.forEach(c => {
+    const nc = newCourse(c.subject, c.className);
+    Object.keys(nc).forEach(k => { if (c[k] == null && nc[k] != null) c[k] = nc[k]; });
+    if (!Array.isArray(c.students)) c.students = [];
+    if (!Array.isArray(c.haLog)) c.haLog = [];
+    if (!c.halfYears || typeof c.halfYears !== 'object') c.halfYears = {};
+    ['1', '2'].forEach(h => {
+      const hy = c.halfYears[h] || (c.halfYears[h] = {});
+      if (!Array.isArray(hy.columns)) hy.columns = [];
+      if (!Array.isArray(hy.sonstige)) hy.sonstige = [];
+    });
+  });
+  return d;
 }
 
 /* ============================================================
@@ -956,6 +986,7 @@ let navStack = [];
 function samePage(a, b) {
   return a.name === b.name && a.courseId === b.courseId &&
          a.studentId === b.studentId && a.columnId === b.columnId && a.rasterId === b.rasterId &&
+         (a.name !== 'plan' || a.planId === b.planId) &&
          (a.name !== 'settings' || (a.setPage || null) === (b.setPage || null));
 }
 /* Seite merken: iPadOS beendet Web-Apps im Hintergrund — beim nächsten Start
@@ -1202,6 +1233,10 @@ function render() {
   if (route.name === 'student') return renderStudent();
   if (route.name === 'course') return renderCourse();
   if (route.name === 'courses') return renderCourses();
+  if (route.name === 'kurse') return renderKurse();
+  if (route.name === 'kurs') return renderKurs();
+  if (route.name === 'planung') return renderPlanung();
+  if (route.name === 'plan') return renderPlan();
   if (route.name === 'todos') return renderTodos();
   if (route.name === 'termine') return renderTermine();
   if (route.name === 'settings') return renderSettings();
@@ -1211,15 +1246,22 @@ function render() {
    erscheint deshalb nicht als eigener Navigationspunkt. */
 const TOP_PAGES = [
   { name: 'home',    label: 'Stundenplan', nav: false },
-  { name: 'courses', label: 'Kurse' },
+  { name: 'kurse',   label: 'Kurse' },
+  { name: 'courses', label: 'Noten' },
+  { name: 'planung', label: 'Planung' },
   { name: 'todos',   label: 'Todos' },
   { name: 'termine', label: 'Termine' },
 ];
-/* Unterseiten eines Kurses gehören navigatorisch zu „Kurse" */
+/* Unterseiten der Noten eines Kurses gehören navigatorisch zu „Noten" */
 const COURSE_SUBPAGES = ['course', 'student', 'ka', 'ha', 'seating', 'raster', 'gruppen'];
 /* Seiten, die zu den Einstellungen gehören */
 const SETTINGS_SUBPAGES = ['settings', 'rasterVorlagen', 'rasterEdit'];
-function navActive() { return COURSE_SUBPAGES.includes(route.name) ? 'courses' : route.name; }
+function navActive() {
+  if (COURSE_SUBPAGES.includes(route.name)) return 'courses';
+  if (route.name === 'kurs') return 'kurse';
+  if (route.name === 'plan') return 'planung';
+  return route.name;
+}
 
 function renderTopNav() {
   const el = document.getElementById('topnav');
@@ -1266,7 +1308,7 @@ function renderCourses() {
       <button class="btn small" id="backupNow">Backup jetzt</button></div>` : ''}
 
     <div class="page-head">
-      <div><h1>Kurse</h1><div class="sub">${data.courses.length} Kurse · ${studCount} Schüler:innen insgesamt</div></div>
+      <div><h1>Noten</h1><div class="sub">${data.courses.length} Kurse · ${studCount} Schüler:innen insgesamt</div></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn" id="btnPrintAll" title="Zeugnis- oder Notenübersicht aller Kurse">Drucken</button>
         <button class="btn primary" id="btnNewCourse">+ Neuer Kurs</button>
@@ -1376,9 +1418,12 @@ function renderHome() {
         const sub = c ? `${esc(c.className)}${l.room ? ' · ' + esc(l.room) : ''}` : '';
         /* nur Stunden, die es nicht in beiden Wochen gibt, bekommen die Marke */
         const mark = ab && (l.week || 0) ? `<span class="tt-ab">${AB_LABEL[l.week]}</span>` : '';
+        /* Planung dieser Stunde (bei Doppelstunden an der ersten) */
+        const pl = c && !planEdit ? planAt(c.id, isoForWeekday(monday, day), pi) : null;
+        const doc = pl ? `<span class="tt-plan ${pl.done ? 'done' : ''}" data-plan="${pl.id}" role="button" tabindex="0" title="Planung: ${esc(planTitle(pl))}" aria-label="Planung öffnen: ${esc(planTitle(pl))}">${PLAN_DOC_SVG}</span>` : '';
         return `<td class="tt-cell ${isToday ? 'tt-today' : ''} ${isNow ? 'tt-now' : ''}">
-          <button class="tt-lesson" data-day="${day}" data-period="${pi}" style="--c-bg:${col.bg};--c-fg:${col.fg};--c-bar:${col.bar}">
-            ${mark}<span class="tt-subject">${label}</span><span class="tt-meta">${sub}</span></button></td>`;
+          <button class="tt-lesson ${pl ? 'has-plan' : ''}" data-day="${day}" data-period="${pi}" style="--c-bg:${col.bg};--c-fg:${col.fg};--c-bar:${col.bar}">
+            ${mark}<span class="tt-subject">${label}</span><span class="tt-meta">${sub}</span>${doc}</button></td>`;
       }
       return `<td class="tt-cell ${isToday ? 'tt-today' : ''} ${planEdit ? 'tt-editable' : ''}">
         ${planEdit ? `<button class="tt-add" data-day="${day}" data-period="${pi}">+</button>` : ''}</td>`;
@@ -1462,6 +1507,12 @@ function renderHome() {
     else openLessonEditor(day, period, week);
   });
   app().querySelectorAll('.tt-add').forEach(b => b.onclick = () => openLessonEditor(+b.dataset.day, +b.dataset.period, week));
+  /* Dokument-Symbol: öffnet die Planung statt der Noten */
+  app().querySelectorAll('.tt-plan').forEach(el => {
+    const open = e => { e.stopPropagation(); e.preventDefault(); const p = getPlan(el.dataset.plan); if (p) go({ name: 'plan', courseId: p.courseId, planId: p.id }); };
+    el.addEventListener('click', open);
+    el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') open(e); });
+  });
 }
 
 function openLessonEditor(day, period, week) {
@@ -1671,9 +1722,9 @@ function renderTermine() {
   app().querySelectorAll('[data-edit]').forEach(b => b.onclick = () => openTerminForm(b.dataset.edit));
 }
 
-function openTerminForm(id) {
+function openTerminForm(id, preset) {
   const editing = !!id;
-  const t = editing ? data.termine.find(x => x.id === id) : { title: '', date: todayISO(), start: '', end: '', allDay: false, location: '', note: '', courseId: null };
+  const t = editing ? data.termine.find(x => x.id === id) : Object.assign({ title: '', date: todayISO(), start: '', end: '', allDay: false, location: '', note: '', courseId: null }, preset || {});
   const courseOpt = `<option value="">Kein Kurs</option>` + data.courses.map(c =>
     `<option value="${c.id}" ${t.courseId === c.id ? 'selected' : ''}>${esc(c.subject)} · ${esc(c.className)}</option>`).join('');
   modal(editing ? 'Termin bearbeiten' : 'Neuer Termin', `
@@ -1691,7 +1742,7 @@ function openTerminForm(id) {
     <div class="field"><label>Notiz (optional)</label><textarea id="tmNote" placeholder="Details …">${esc(t.note || '')}</textarea></div>
   `, [
     ...(editing ? [{ label: 'Löschen', cls: 'danger', onClick: () => {
-      data.termine = data.termine.filter(x => x.id !== id); save(); closeModal(); renderTermine();
+      data.termine = data.termine.filter(x => x.id !== id); save(); closeModal(); render();
     }}] : []),
     { label: 'Abbrechen', onClick: closeModal },
     { label: 'Speichern', cls: 'primary', onClick: () => {
@@ -1705,7 +1756,7 @@ function openTerminForm(id) {
       };
       if (editing) Object.assign(t, rec);
       else data.termine.push(Object.assign({ id: uid(), uid: uid() + '@pult' }, rec));
-      save(); closeModal(); renderTermine();
+      save(); closeModal(); render();
     }},
   ]);
   document.getElementById('tmAllday').onchange = e => {
@@ -3320,11 +3371,28 @@ function courseNotes(c, studentId) {
   return data.notes.filter(n => n.courseId === c.id && (studentId ? n.studentId === studentId : !n.studentId))
     .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
 }
+/* Eine Notiz zeigt erst ihre erste Zeile; Antippen klappt den ganzen Text auf
+   (Notizfenster und Dashboard). */
+function bindNoteToggles(root) {
+  (root || document).querySelectorAll('[data-note-toggle]').forEach(b => b.onclick = () => {
+    const item = b.closest('.note-item'); if (!item) return;
+    const open = item.classList.toggle('open');
+    b.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+}
 function openNotes(c, studentId) {
   const s = studentId ? c.students.find(x => x.id === studentId) : null;
-  const list = courseNotes(c, studentId).map(n => `<div class="chip">
-    <div class="chip-main"><b>${fmtDateLong(n.date)||'ohne Datum'}</b><span>${esc(n.text)}</span></div>
-    <button class="btn small danger" data-del="${n.id}">Löschen</button></div>`).join('') || `<div class="notice">Noch keine Notizen.</div>`;
+  /* ausgeblendete ganz nach unten */
+  const all = courseNotes(c, studentId);
+  const sorted = all.filter(n => !n.hidden).concat(all.filter(n => n.hidden));
+  const list = sorted.map(n => `<div class="chip note-item ${n.hidden ? 'is-hidden' : ''}">
+    <button class="note-main" data-note-toggle aria-expanded="false">
+      <b>${fmtDateLong(n.date)||'ohne Datum'}${n.hidden ? ' <small>· ausgeblendet</small>' : ''}</b>
+      <span class="note-text">${esc(n.text)}</span></button>
+    <div class="note-acts">
+      <button class="btn small" data-hide="${n.id}">${n.hidden ? 'Einblenden' : 'Ausblenden'}</button>
+      <button class="btn small danger" data-del="${n.id}">Löschen</button>
+    </div></div>`).join('') || `<div class="notice">Noch keine Notizen.</div>`;
   modal(s ? `Notizen — ${esc(s.firstName)} ${esc(s.lastName||'')}` : 'Kursnotizen', `
     <div class="field"><label>Neue Notiz</label>
       <input id="ntDate" type="date" value="${todayISO()}" style="margin-bottom:8px">
@@ -3340,6 +3408,12 @@ function openNotes(c, studentId) {
     save(); openNotes(c, studentId);
   };
   document.querySelectorAll('[data-del]').forEach(b => b.onclick = () => { data.notes = data.notes.filter(n => n.id !== b.dataset.del); save(); openNotes(c, studentId); });
+  document.querySelectorAll('[data-hide]').forEach(b => b.onclick = () => {
+    const n = data.notes.find(x => x.id === b.dataset.hide); if (!n) return;
+    if (n.hidden) delete n.hidden; else n.hidden = true;
+    save(); openNotes(c, studentId);
+  });
+  bindNoteToggles(document.getElementById('modalBody'));
 }
 
 /* Einsammel-Listen */
@@ -3361,7 +3435,7 @@ function openLists(c) {
     <button class="btn small" id="liAdd">Liste anlegen</button>
     <hr style="border:none;border-top:1px solid var(--line-soft);margin:14px 0">
     <div class="chip-list">${rows}</div>
-  `, [{ label: 'Schließen', cls: 'primary', onClick: closeModal }]);
+  `, [{ label: 'Schließen', cls: 'primary', onClick: () => { closeModal(); render(); } }]);
   document.getElementById('liAdd').onclick = () => {
     const title = val('liTitle').trim(); if (!title) return toast('Bitte Titel eingeben.');
     data.lists.push({ id: uid(), courseId: c.id, title, dueDate: val('liDue'), status: {} });
@@ -3385,7 +3459,7 @@ function openList(c, listId) {
     ${l.dueDate?`<div class="cs-sub" style="margin-bottom:8px">Fällig ${fmtDateLong(l.dueDate)}</div>`:''}
     <div class="cs-sub" style="margin-bottom:8px">Antippen wechselt: offen → abgegeben → befreit.</div>
     <div class="chip-list">${rows}</div>
-  `, [{ label: 'Zurück', onClick: () => openLists(c) }, { label: 'Fertig', cls: 'primary', onClick: closeModal }]);
+  `, [{ label: 'Zurück', onClick: () => openLists(c) }, { label: 'Fertig', cls: 'primary', onClick: () => { closeModal(); render(); } }]);
   document.querySelectorAll('.li-toggle').forEach(b => b.onclick = () => { const sId = b.dataset.s; l.status[sId] = cycle[l.status[sId] || 'offen']; save(); openList(c, listId); });
 }
 
@@ -3559,12 +3633,14 @@ function confirmDeleteCourse(c) {
     { label: 'Abbrechen', onClick: () => openCourseForm(c) },
     { label: 'Endgültig löschen', cls: 'danger', onClick: () => {
       const n = c.students.reduce((a, s) => a + gradeCountForStudent(s.id), 0);
-      const snap = beginChange([['courses'], ['notes'], ['lists'],
+      const snap = beginChange([['courses'], ['notes'], ['lists'], ['units'], ['lessonPlans'],
         ...c.students.flatMap(s => [['grades', s.id], ['sonstigeValues', s.id], ['manual', s.id],
           ['weightOverride', s.id], ['kaPoints', s.id]])]);
       c.students.forEach(s => { delete data.grades[s.id]; delete data.sonstigeValues[s.id]; delete data.manual[s.id]; delete data.weightOverride[s.id]; delete data.kaPoints[s.id]; });
       data.notes = data.notes.filter(n => n.courseId !== c.id);
       data.lists = data.lists.filter(l => l.courseId !== c.id);
+      data.units = (data.units || []).filter(u => u.courseId !== c.id);
+      data.lessonPlans = (data.lessonPlans || []).filter(p => p.courseId !== c.id);
       data.courses = data.courses.filter(x => x.id !== c.id);
       commitChange(`Kurs „${c.subject} ${c.className}" gelöscht (${c.students.length} Schüler:innen, ${n} ${n === 1 ? 'Note' : 'Noten'})`, snap);
       save(); closeModal(); go({ name: 'home' });
@@ -3955,6 +4031,7 @@ initLock();
 if (isStandalone()) storagePersist(true);
 maybeShowWelcome();
 dailySnapshot();
+refreshArchiveCache();   // Schuljahres-Archive fürs Backup bereithalten (sicherung.js)
 loadAppVersion().then(() => {
   if (SETTINGS_SUBPAGES.includes(route.name)) render();
   else renderTopbarRight();

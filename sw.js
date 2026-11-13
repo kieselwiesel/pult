@@ -12,7 +12,7 @@
    Veröffentlichen: VERSION hier UND in version.json erhöhen (samt Changelog). */
 'use strict';
 
-const VERSION = '1.0.12';
+const VERSION = '1.1.0';
 const CACHE = 'pult-' + VERSION;
 const FLAGS = 'pult-flags';          // Freigabe für ein Update (von der App gesetzt)
 const ASSETS = [
@@ -28,6 +28,8 @@ const ASSETS = [
   './js/werkzeuge.js',
   './js/schueler.js',
   './js/alltag.js',
+  './js/planung.js',
+  './js/kurs.js',
   './js/sperre.js',
   './js/sicherung.js',
   './js/einstellungen.js',

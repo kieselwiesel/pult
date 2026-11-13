@@ -3,6 +3,8 @@
    ------------------------------------------------------------
    1. Backup als Datei — mit Namen, verschlüsselt oder pseudonym. Auf dem
       iPad geht die Datei über das Teilen-Menü (Dateien, OneDrive, AirDrop).
+      Das volle Backup enthält auch die Schuljahres-Archive (archives[]);
+      die übrigen internen Stände bleiben auf dem Gerät.
    2. Verschlüsselung: Passwort → PBKDF2 (SHA-256, 600 000 Runden) →
       AES-GCM 256. Ohne Passwort ist das Backup nicht wiederherstellbar.
    3. Interne Sicherungsstände in IndexedDB: täglich automatisch sowie vor
@@ -45,9 +47,15 @@ async function writeBackupFile(payload, filename, countsAsBackup) {
   toast(countsAsBackup ? 'Backup gesichert.' : 'Datei gesichert.');
   return true;
 }
-/* Volles Backup mit Klarnamen — die eigentliche Sicherung */
+/* Volles Backup mit Klarnamen — die eigentliche Sicherung, samt Schuljahres-Archiven.
+   Ältere Versionen lesen nur „data" und übergehen „archives". */
 function exportBackup() {
-  return writeBackupFile(backupPayload(data), `pult-backup-${todayISO()}.json`, true);
+  if (archiveMode) return toast('Erst das Archiv verlassen.');   // sonst landete das angesehene Archiv im Backup
+  if (archiveCache === null) return refreshArchiveCache().then(exportBackup);
+  const payload = backupPayload(data);
+  const archives = archivePayload();
+  if (archives.length) payload.archives = archives;
+  return writeBackupFile(payload, `pult-backup-${todayISO()}.json`, true);
 }
 
 /* Ersetzt Schülernamen durch eine Nummer je Kurs (alphabetisch nach Nachname).
@@ -69,10 +77,45 @@ function pseudonymizeData(d) {
   return d;
 }
 /* Pseudonymisiertes Backup zum Teilen/Ablegen ohne Namen.
-   Setzt den „letztes Backup"-Zähler NICHT zurück (kein vollwertiger Namens-Restore). */
+   Setzt den „letztes Backup"-Zähler NICHT zurück (kein vollwertiger Namens-Restore).
+   Ohne Archive — die enthalten Klarnamen. Gekennzeichnet, damit das Einlesen warnt. */
 function exportBackupPseudonym() {
+  if (archiveMode) return toast('Erst das Archiv verlassen.');
   const clone = pseudonymizeData(JSON.parse(JSON.stringify(data)));
-  return writeBackupFile(backupPayload(clone), `pult-backup-pseudonym-${todayISO()}.json`, false);
+  return writeBackupFile(backupPayload(clone, { pseudonym: true }), `pult-backup-pseudonym-${todayISO()}.json`, false);
+}
+/* ---------- Backup als Schlüssel (Code vergessen, sperre.js) ----------
+   Eigene Datensätze tragen zufällige IDs aus uid(), die nirgends angezeigt
+   werden. Feste IDs (Beispieldatei „c-eng", Raster-Vorlagen, Kategorien)
+   haben Bindestriche oder liegen außerhalb der gesammelten Bereiche und
+   zählen deshalb nicht — sonst entsperrte die öffentliche Beispieldatei. */
+function ownedIds(d) {
+  const ids = new Set();
+  const add = x => { if (x && typeof x.id === 'string' && /^[a-z0-9]{5,}$/.test(x.id)) ids.add(x.id); };
+  ((d && d.courses) || []).forEach(c => {
+    add(c); (c.students || []).forEach(add);
+    Object.values(c.halfYears || {}).forEach(hy => [...((hy && hy.columns) || []), ...((hy && hy.sonstige) || [])].forEach(add));
+  });
+  ['todos', 'termine', 'notes', 'lists', 'units', 'lessonPlans'].forEach(k => (Array.isArray(d && d[k]) ? d[k] : []).forEach(add));
+  (((d && d.timetable) || {}).lessons || []).forEach(add);
+  return ids;
+}
+/* true, wenn das Backup (oder eines seiner Archive) zu den Daten hier gehört —
+   sonst ein Hinweistext. Pseudonyme Backups zählen nicht: Sie sind zum
+   Weitergeben gedacht. */
+function backupProvesOwnership(incoming, archives, parsed) {
+  if (!incoming || !Array.isArray(incoming.courses)) return 'Das ist keine Pult-Backup-Datei.';
+  if ((parsed && parsed.pseudonym) || looksPseudonymous(incoming)) return 'Ein pseudonymes Backup reicht dafür nicht — bitte ein volles Backup wählen.';
+  const mine = ownedIds(archiveMode ? archiveMode.live : data);
+  if (!mine.size) return 'Hier liegen noch keine eigenen Daten — Zurücksetzen verliert nichts.';
+  const sources = [incoming, ...(Array.isArray(archives) ? archives : []).map(a => a && a.data)].filter(Boolean);
+  return sources.some(d => [...ownedIds(d)].some(id => mine.has(id))) ? true
+    : 'Dieses Backup gehört nicht zu den Daten in diesem Browser.';
+}
+/* Auch ältere pseudonyme Dateien (ohne Kennzeichen) erkennen: alle Namen sind Nummern */
+function looksPseudonymous(d) {
+  const all = (d.courses || []).flatMap(c => c.students || []);
+  return all.length > 0 && all.every(s => /^\d+$/.test(String(s.firstName || '')) && !s.lastName);
 }
 
 /* ---------- Verschlüsselung ----------
@@ -84,6 +127,9 @@ function exportBackupPseudonym() {
                 WebAuthn-Erweiterung PRF einen geheimen Wert, daraus per HKDF
                 der Schlüssel. Geht nur auf Geräten, die diesen Passkey haben
                 (iCloud-Schlüsselbund) — darum wird ein Passwort dazu empfohlen.
+   Die Schuljahres-Archive liegen getrennt in archivesCipher (gleicher
+   Schlüssel, eigenes iv) — so lesen ältere Versionen „ciphertext" weiter
+   als reinen Datenbestand.
    Format 1 (ältere Backups, nur Passwort) wird weiterhin gelesen. */
 const cryptoReady = () => !!(window.isSecureContext && window.crypto && crypto.subtle);
 const b64enc = buf => { let s = ''; new Uint8Array(buf).forEach(b => s += String.fromCharCode(b)); return btoa(s); };
@@ -139,8 +185,8 @@ async function passkeyKey(credId, salt) {
     base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
 }
 
-/* ways: { password: string|null, passkey: bool } */
-async function encryptBackupData(obj, ways) {
+/* ways: { password: string|null, passkey: bool } · archives: wie archivePayload() */
+async function encryptBackupData(obj, ways, archives) {
   const keys = [];
   const dek = randBytes(32);
   /* Touch ID zuerst — die Abfrage braucht den Fingertipp, der gerade erst war */
@@ -154,18 +200,27 @@ async function encryptBackupData(obj, ways) {
     const w = await aesEnc(await deriveKey(ways.password, salt, KDF_ITER), dek);
     keys.push({ type: 'password', kdf: { name: 'PBKDF2', hash: 'SHA-256', iterations: KDF_ITER, salt: b64enc(salt) }, iv: w.iv, wrapped: w.ct });
   }
-  const body = await aesEnc(await aesKey(dek, ['encrypt']), new TextEncoder().encode(JSON.stringify(obj)));
-  return { enc: 2, cipher: { name: 'AES-GCM', iv: body.iv }, ciphertext: body.ct, keys };
+  const dekKey = await aesKey(dek, ['encrypt']);
+  const seal = obj => aesEnc(dekKey, new TextEncoder().encode(JSON.stringify(obj)));
+  const body = await seal(obj);
+  const out = { enc: 2, cipher: { name: 'AES-GCM', iv: body.iv }, ciphertext: body.ct, keys };
+  if (archives && archives.length) {
+    const a = await seal(archives);
+    out.archivesCipher = { iv: a.iv, ciphertext: a.ct };
+  }
+  return out;
 }
+/* Ergebnis des Entschlüsselns: { data, archives } */
 async function openWithKey(payload, entry, key) {
-  const dek = await aesDec(key, entry.iv, entry.wrapped);
-  const pt = await aesDec(await aesKey(dek, ['decrypt']), payload.cipher.iv, payload.ciphertext);
-  return JSON.parse(new TextDecoder().decode(pt));
+  const dek = await aesKey(await aesDec(key, entry.iv, entry.wrapped), ['decrypt']);
+  const open = async (iv, ct) => JSON.parse(new TextDecoder().decode(await aesDec(dek, iv, ct)));
+  const ac = payload.archivesCipher;
+  return { data: await open(payload.cipher.iv, payload.ciphertext), archives: ac ? await open(ac.iv, ac.ciphertext) : [] };
 }
 async function decryptWithPassword(payload, password) {
-  if (payload.enc !== 2) {   // Format 1: Passwort-Schlüssel direkt
+  if (payload.enc !== 2) {   // Format 1: Passwort-Schlüssel direkt, ohne Archive
     const key = await deriveKey(password, b64dec(payload.kdf.salt), payload.kdf.iterations || KDF_ITER);
-    return JSON.parse(new TextDecoder().decode(await aesDec(key, payload.cipher.iv, payload.ciphertext)));
+    return { data: JSON.parse(new TextDecoder().decode(await aesDec(key, payload.cipher.iv, payload.ciphertext))), archives: [] };
   }
   const e = (payload.keys || []).find(k => k.type === 'password');
   if (!e) throw new Error('kein Passwort hinterlegt');
@@ -179,7 +234,9 @@ async function decryptWithPasskey(payload) {
 const backupKeyTypes = payload => (payload.enc === 2 ? (payload.keys || []).map(k => k.type) : ['password']);
 
 async function exportBackupEncrypted() {
+  if (archiveMode) return toast('Erst das Archiv verlassen.');
   if (!cryptoReady()) return toast('Verschlüsselung geht nur, wenn Pult. über https geöffnet ist.');
+  if (archiveCache === null) await refreshArchiveCache();
   const touch = await passkeyPrfSupported();
   const bio = bioName();
   modal('Verschlüsseltes Backup', `
@@ -205,7 +262,7 @@ async function exportBackupEncrypted() {
       if (usePw && pw !== val('bkPw2')) return toast('Die Passwörter stimmen nicht überein.');
       msg.textContent = useBio ? `Bitte mit ${bio} bestätigen …` : 'Wird verschlüsselt …';
       let enc;
-      try { enc = await encryptBackupData(data, { password: usePw ? pw : null, passkey: useBio }); }
+      try { enc = await encryptBackupData(data, { password: usePw ? pw : null, passkey: useBio }, archivePayload()); }
       catch (e) {
         msg.innerHTML = `<span style="color:var(--g-fail)">${esc(e.name === 'NoPrf' ? e.message + ' Bitte mit Passwort verschlüsseln.'
           : e.name === 'NotAllowedError' ? `${bio} abgebrochen.` : 'Verschlüsseln fehlgeschlagen.')}</span>`;
@@ -236,15 +293,21 @@ async function exportBackupEncrypted() {
 
 /* ---------- Einlesen ---------- */
 function importBackupFile(file) {
+  if (archiveMode) return toast('Erst das Archiv verlassen.');
   const reader = new FileReader();
   reader.onload = () => {
     let parsed;
     try { parsed = JSON.parse(reader.result); }
     catch (e) { return toast('Datei ist kein gültiges Pult-Backup.'); }
     if (parsed && parsed.encrypted) return askBackupKey(parsed);
-    confirmBackupImport(parsed, parsed && parsed.data ? parsed.data : parsed);
+    confirmBackupImport(parsed, parsed && parsed.data ? parsed.data : parsed, parsed && parsed.archives);
   };
   reader.readAsText(file);
+}
+/* Tag (lokal), an dem die Datei entstand — '' wenn unbekannt */
+function backupDay(parsed) {
+  const d = new Date((parsed && parsed.exportedAt) || NaN);
+  return isNaN(d) ? '' : `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 function askBackupKey(parsed) {
   if (!cryptoReady()) return toast('Verschlüsselte Backups lassen sich nur über https einlesen.');
@@ -262,7 +325,7 @@ function askBackupKey(parsed) {
     ...(hasPw ? [{ label: 'Mit Passwort entsperren', cls: pkHere ? '' : 'primary', onClick: async () => {
       const msg = document.getElementById('bkPwMsg');
       msg.textContent = 'Wird entschlüsselt …';
-      try { confirmBackupImport(parsed, await decryptWithPassword(parsed, val('bkPwIn'))); }
+      try { const r = await decryptWithPassword(parsed, val('bkPwIn')); confirmBackupImport(parsed, r.data, r.archives); }
       catch (e) { msg.innerHTML = '<span style="color:var(--g-fail)">Falsches Passwort oder beschädigte Datei.</span>'; }
     }}] : []),
   ]);
@@ -270,7 +333,7 @@ function askBackupKey(parsed) {
   if (bio) bio.onclick = async () => {
     const msg = document.getElementById('bkPwMsg');
     msg.textContent = `Bitte mit ${bioName()} bestätigen …`;
-    try { confirmBackupImport(parsed, await decryptWithPasskey(parsed)); }
+    try { const r = await decryptWithPasskey(parsed); confirmBackupImport(parsed, r.data, r.archives); }
     catch (e) {
       msg.innerHTML = `<span style="color:var(--g-fail)">${esc(e.name === 'NoPrf' ? e.message
         : e.name === 'NotAllowedError' ? `Abgebrochen — oder der Passkey ist auf diesem Gerät nicht vorhanden.`
@@ -279,24 +342,55 @@ function askBackupKey(parsed) {
   };
   setTimeout(() => { const el = document.getElementById('bkPwIn'); if (el && !pkHere) el.focus(); }, 50);
 }
-function confirmBackupImport(parsed, incoming) {
+/* Ersetzen: Datenbestand austauschen, enthaltene Archive kommen zu den vorhandenen dazu.
+   Als Archiv ablegen: alles bleibt, nur der Datenstand des Backups wird ein
+   weiteres Archiv — darin enthaltene Archive werden nicht übernommen. */
+function confirmBackupImport(parsed, incoming, archives) {
   if (!incoming || !Array.isArray(incoming.courses)) return toast('Datei ist kein gültiges Pult-Backup.');
+  archives = (Array.isArray(archives) ? archives : []).filter(a => a && a.data && Array.isArray(a.data.courses));
   const newer = Number((incoming.meta || {}).schema) > SCHEMA;
-  modal('Backup einlesen?', `<p>Das Backup enthält <b>${incoming.courses.length} Kurse</b>${parsed.exportedAt ? ` und stammt vom ${fmtDateLong(String(parsed.exportedAt).slice(0, 10))}` : ''}. Der aktuelle Datenbestand in diesem Browser wird <b>ersetzt</b>.</p>
-    <p class="cs-sub">Der jetzige Stand wird vorher intern gesichert (Einstellungen → Daten).</p>
+  const pseudo = !!parsed.pseudonym || looksPseudonymous(incoming);
+  const day = backupDay(parsed);
+  const nA = archives.length;
+  modal('Backup einlesen?', `<p>Das Backup enthält <b>${incoming.courses.length} Kurse</b>${nA ? ` und ${nA === 1 ? 'ein Schuljahres-Archiv' : `${nA} Schuljahres-Archive`}` : ''}${day ? `, Stand ${fmtDateLong(day)}` : ''}.</p>
+    <p class="cs-sub"><b>Ersetzen</b> tauscht den Datenbestand in diesem Browser gegen das Backup — der jetzige Stand wird vorher intern gesichert${nA ? ', die Archive kommen zu den vorhandenen dazu' : ''}.
+      <b>Als Archiv ablegen</b> lässt alles, wie es ist, und legt das Backup unter Einstellungen → Daten zum Ansehen ab${nA ? ' (ohne die darin enthaltenen Archive)' : ''}.</p>
+    ${pseudo ? '<div class="notice" style="border-color:var(--amber)"><b>Pseudonymes Backup:</b> Namen sind durch Nummern ersetzt, Kurzinfos, Raster-Rückmeldungen und Notenprotokoll fehlen. Zum Wiederherstellen taugt es nicht — Ersetzen tauscht deine Namen gegen Nummern.</div>' : ''}
     ${newer ? '<div class="notice" style="border-color:var(--amber)">Das Backup stammt aus einer neueren Version von Pult. Bitte erst Pult. aktualisieren — sonst können Teile fehlen.</div>' : ''}`, [
     { label: 'Abbrechen', onClick: closeModal },
-    { label: 'Ersetzen', cls: 'primary', onClick: async () => {
+    { label: 'Als Archiv ablegen', onClick: () => askArchiveLabel(parsed, incoming, day) },
+    { label: pseudo ? 'Trotzdem ersetzen' : 'Ersetzen', cls: pseudo ? 'danger' : 'primary', onClick: async () => {
       await takeSnapshot('Vor dem Einlesen eines Backups').catch(() => {});
-      replaceData(incoming);
-      toast('Backup eingelesen.');
+      replaceData(incoming, pseudo ? '' : day);
+      const n = await addArchives(archives).catch(() => 0);
+      toast(n ? `Backup eingelesen — ${n === 1 ? 'ein Archiv' : `${n} Archive`} übernommen.` : 'Backup eingelesen.');
     }},
   ]);
 }
-/* gesamten Datenbestand austauschen (Backup, Sicherungsstand) */
-function replaceData(incoming) {
+function askArchiveLabel(parsed, incoming, day) {
+  modal('Als Archiv ablegen', `
+    <div class="field"><label>Name des Archivs</label><input id="aiLabel" type="text" value="${esc(day ? `Backup vom ${fmtDateLong(day)}` : 'Archiv aus Backup')}"></div>
+    <div class="hint">Der aktuelle Datenbestand bleibt unverändert. Das Archiv lässt sich unter Einstellungen → Daten ansehen, als Datei sichern oder wiederherstellen.</div>`, [
+    { label: 'Abbrechen', onClick: closeModal },
+    { label: 'Ablegen', cls: 'primary', onClick: async () => {
+      const at = isNaN(new Date(parsed.exportedAt || NaN)) ? new Date().toISOString() : new Date(parsed.exportedAt).toISOString();
+      let n;
+      try { n = await addArchives([{ at, label: val('aiLabel').trim() || 'Archiv aus Backup', data: incoming }]); }
+      catch (e) { return toast('Interne Sicherung ist in diesem Browser nicht möglich.'); }
+      closeModal();
+      toast(n ? 'Als Archiv abgelegt (Einstellungen → Daten).' : 'Dieser Stand liegt schon als Archiv vor.');
+      if (route.name === 'settings') render();
+    }},
+  ]);
+  setTimeout(() => { const el = document.getElementById('aiLabel'); if (el) el.select(); }, 50);
+}
+/* gesamten Datenbestand austauschen (Backup, Sicherungsstand).
+   fromDay: Tag des eingelesenen Backups — die Datei ist selbst ein Backup,
+   die Erinnerung zählt ab dann (sonst stünde dort das Datum davor). */
+function replaceData(incoming, fromDay) {
   data = Object.assign(DEFAULT_DATA(), incoming);
   data.meta = Object.assign(DEFAULT_DATA().meta, incoming.meta || {});
+  if (fromDay && fromDay > (data.meta.lastBackup || '')) data.meta.lastBackup = fromDay;
   runMigrations(); applyTheme();
   save(); closeModal(); navStack = [];
   go({ name: 'home' });
@@ -338,10 +432,57 @@ async function takeSnapshot(label, auto, keep) {
   const list = (await listSnapshots()).filter(x => !x.keep);
   const drop = list.slice(SNAP_MAX);
   if (drop.length) await snapTx('readwrite', st => drop.forEach(x => st.delete(x.id)));
+  if (keep) await refreshArchiveCache();
   return snap.id;
 }
 async function getSnapshot(id) { return snapTx('readonly', st => st.get(id)); }
-async function deleteSnapshot(id) { return snapTx('readwrite', st => st.delete(id)); }
+async function deleteSnapshot(id) { await snapTx('readwrite', st => st.delete(id)); await refreshArchiveCache(); }
+
+/* Schuljahres-Archive (keep) fürs Backup im Speicher vorhalten: „Backup sichern"
+   muss das Teilen-Menü ohne Wartezeit öffnen — iPadOS verlangt dafür einen
+   frischen Fingertipp. Aktualisiert beim Start und bei jeder Änderung. */
+let archiveCache = null;   // [{ id, at, label, json }] · null = noch nicht geladen
+async function refreshArchiveCache() {
+  try {
+    const all = (await snapTx('readonly', st => st.getAll())) || [];
+    archiveCache = all.filter(x => x.keep).sort((a, b) => a.at.localeCompare(b.at))
+      .map(({ id, at, label, json }) => ({ id, at, label, json }));
+  } catch (e) { archiveCache = []; }   // ohne IndexedDB gibt es keine Archive
+  return archiveCache;
+}
+const archivePayload = () => (archiveCache || []).map(a => ({ id: a.id, at: a.at, label: a.label, data: JSON.parse(a.json) }));
+
+/* Archive (aus einem Backup) ablegen. Schon vorhandene — gleiche id oder
+   gleicher Inhalt — werden übersprungen. Ergebnis: Anzahl neu abgelegter. */
+async function addArchives(list) {
+  if (!list || !list.length) return 0;
+  const existing = (await snapTx('readonly', st => st.getAll())) || [];
+  const ids = new Set(existing.map(x => x.id)), jsons = new Set(existing.map(x => x.json));
+  const add = [];
+  list.forEach(a => {
+    const json = JSON.stringify(a.data);
+    if ((a.id && ids.has(String(a.id))) || jsons.has(json)) return;
+    const id = a.id ? String(a.id) : uid() + Date.now().toString(36);
+    ids.add(id); jsons.add(json);
+    add.push({ id, at: typeof a.at === 'string' && !isNaN(new Date(a.at)) ? a.at : new Date().toISOString(),
+      label: String(a.label || 'Archiv'), auto: false, keep: true, size: json.length, courses: a.data.courses.length, json });
+  });
+  if (add.length) await snapTx('readwrite', st => add.forEach(x => st.put(x)));
+  await refreshArchiveCache();
+  return add.length;
+}
+
+/* Alle internen Stände samt Archiven endgültig löschen (Zurücksetzen bei
+   vergessenem Code — sonst ließe sich die Sperre über „Wiederherstellen" umgehen) */
+function deleteSnapshotDb() {
+  return new Promise(resolve => {
+    if (!window.indexedDB) return resolve(false);
+    const req = indexedDB.deleteDatabase(SNAP_DB);
+    req.onsuccess = () => resolve(true);
+    req.onerror = req.onblocked = () => resolve(false);
+    setTimeout(() => resolve(false), 3000);
+  });
+}
 /* einmal am Tag beim Start */
 async function dailySnapshot() {
   try {
