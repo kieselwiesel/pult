@@ -339,7 +339,7 @@ async function sharePdf(blob, filename) {
   const file = new File([blob], filename, { type: 'application/pdf' });
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
     try {
-      await navigator.share({ files: [file], title: filename });
+      await navigator.share({ files: [file] });   // ohne title: iPadOS legt ihn sonst als zusätzliche „Text.txt“ ab
       return 'shared';
     } catch (e) {
       if (e && e.name === 'AbortError') return 'aborted';
@@ -356,7 +356,7 @@ async function saveFile(blob, filename) {
   try {
     const file = new File([blob], filename, { type: blob.type });
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
-      await navigator.share({ files: [file], title: filename });
+      await navigator.share({ files: [file] });   // ohne title: iPadOS legt ihn sonst als zusätzliche „Text.txt“ ab
       return true;
     }
   } catch (e) {

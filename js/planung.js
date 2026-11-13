@@ -199,6 +199,12 @@ function upcomingSlots(courseId, n) {
   }).slice(0, n);
 }
 function slotKey(s) { return `${s.date}|${s.period}`; }
+/* Termin in zwei Teilen: „Mo, 16.11." und „1./2. Std." (Liste „Nächste Stunden") */
+function slotDayLabel(s) {
+  const d = new Date(s.date + 'T00:00:00');
+  return `${WEEKDAYS[d.getDay()] || ''}, ${fmtDate(s.date)}`;
+}
+const slotPeriodLabel = s => `${(s.periods || [s.period]).map(periodLabel).join('/')} Std.`;
 function slotLabel(s, long) {
   const d = new Date(s.date + 'T00:00:00');
   const day = (long ? WEEKDAYS_LONG : WEEKDAYS)[d.getDay()] || '';
@@ -321,8 +327,9 @@ function doSwapPlan(plan, dir, after) {
   if (after) after();
 }
 /* Knöpfe ↑ ↓ ⇊ für eine zugeordnete Stunde */
-function planMoveHtml(p, noUp) {
-  return `<span class="pl-move">
+/* stack: ↑ über ↓, ⇊ daneben (Liste „Nächste Stunden"); sonst nebeneinander */
+function planMoveHtml(p, noUp, stack) {
+  return `<span class="pl-move ${stack ? 'stack' : ''}">
     <button class="btn small" data-move-up="${p.id}" ${noUp ? 'disabled' : ''} title="Mit der vorherigen Stunde tauschen" aria-label="Mit der vorherigen Stunde tauschen">↑</button>
     <button class="btn small" data-move-down="${p.id}" title="Mit der nächsten Stunde tauschen" aria-label="Mit der nächsten Stunde tauschen">↓</button>
     <button class="btn small" data-shift="${p.id}" title="Diese und alle folgenden Stunden eine Stunde nach hinten schieben — bis zur nächsten freien" aria-label="Diese und alle folgenden nach hinten schieben">⇊</button>
@@ -455,9 +462,9 @@ function renderPlanung() {
   const slotRows = next.map((s, i) => {
     const p = plansAtSlot(s)[0];
     return `<div class="pl-slot ${p ? '' : 'free'}">
-      <span class="pl-slot-when">${esc(slotLabel(s))}</span>
+      <span class="pl-slot-when"><span>${esc(slotDayLabel(s))}</span><span>${esc(slotPeriodLabel(s))}</span></span>
       ${p ? `<button class="pl-slot-topic" data-open="${p.id}">${esc(planTitle(p))}${p.unitId && getUnit(p.unitId) ? `<small>${esc(getUnit(p.unitId).title)}</small>` : ''}</button>
-             ${planMoveHtml(p, i === 0)}`
+             ${planMoveHtml(p, i === 0, true)}`
           : `<span class="pl-slot-topic cs-sub">noch nicht geplant</span>
              <button class="btn small" data-plan-slot="${slotKey(s)}">Planen</button>`}
     </div>`;

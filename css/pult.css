@@ -1160,7 +1160,7 @@ html.is-dark .pl-course.active { background: color-mix(in srgb, var(--c-bar) 24%
 @media (max-width: 860px) { .pl-layout { grid-template-columns: 1fr; } }
 .pl-slot { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--line-soft); }
 .pl-slot:last-child { border-bottom: none; }
-.pl-slot-when { flex: none; width: 150px; font-size: 13px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.pl-slot-when { flex: none; width: 82px; display: flex; flex-direction: column; line-height: 1.35; font-size: 13px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
 .pl-slot-topic { flex: 1; min-width: 0; text-align: left; }
 button.pl-slot-topic { appearance: none; border: none; background: none; font: inherit; font-weight: 650; color: var(--ink); cursor: pointer; padding: 4px 0; display: flex; flex-direction: column; }
 button.pl-slot-topic small { font-weight: 500; font-size: 12px; color: var(--ink-faint); }
@@ -1169,7 +1169,13 @@ button.pl-slot-topic small { font-weight: 500; font-size: 12px; color: var(--ink
 .px-link { appearance: none; border: none; background: none; font: inherit; font-weight: 650; color: var(--accent-ink); cursor: pointer; padding: 2px 0; display: block; margin-top: 4px; }
 .pl-move .btn.small { min-width: 34px; padding: 0 8px; font-size: 16px; }
 .pl-move .btn[disabled] { opacity: .35; cursor: default; }
-@media (max-width: 560px) { .pl-slot { flex-wrap: wrap; } .pl-slot-when { width: 100%; } }
+/* Liste: ↑ über ↓, ⇊ rechts daneben — spart Breite für das Thema */
+.pl-move.stack { display: grid; grid-template-columns: auto auto; grid-template-rows: auto auto; gap: 4px 4px; align-items: center; }
+.pl-move.stack [data-move-up] { grid-column: 1; grid-row: 1; }
+.pl-move.stack [data-move-down] { grid-column: 1; grid-row: 2; }
+.pl-move.stack [data-shift] { grid-column: 2; grid-row: 1 / span 2; }
+.pl-move.stack .btn.small { min-height: 30px; height: 30px; min-width: 32px; padding: 0 6px; }
+@media (max-width: 560px) { .pl-slot { flex-wrap: wrap; } .pl-slot-when { width: 100%; flex-direction: row; gap: 6px; } }
 .pl-unit { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; margin-bottom: 12px; box-shadow: var(--shadow); }
 .pl-unit.pl-loose { background: var(--card-2); box-shadow: none; }
 .pl-unit-head { display: flex; align-items: center; gap: 10px; }
