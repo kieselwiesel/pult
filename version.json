@@ -9,7 +9,8 @@
         "Eigene Notenkategorien neben Schriftlich und Mündlich (z. B. Praxis, Portfolio): anlegen unter Einstellungen → Notenkategorien, im Kurs aufnehmen und gewichten unter Kurs bearbeiten",
         "+ Leistung → Kategorie-Note; auch Klassenarbeit/Test, Bewertungsraster, Sonstige Leistungen und Zwischenstände können in eigenen Kategorien zählen",
         "Notentabelle und Notenverlauf: eigene Kategorien als weitere Ansicht; Rechenweg, individuelle Gewichtung und Ausdrucke zeigen alle Kategorien",
-        "Kategorien ohne Note zählen nicht — ihr Anteil verteilt sich auf die übrigen; Kategorien mit 0 % bleiben sichtbar, zählen aber nicht"
+        "Kategorien ohne Note zählen nicht — ihr Anteil verteilt sich auf die übrigen; Kategorien mit 0 % bleiben sichtbar, zählen aber nicht",
+        "Notentabelle: Standard ist jetzt „Gesamt und Neuestes zuerst“; die bisherige Anordnung heißt „Von links nach rechts“"
       ]
     },
     {

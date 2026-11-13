@@ -17,7 +17,7 @@ const DEFAULT_DATA = () => ({
     ferienLabel: 'Ferien',
     zeugnisDatum: '',
     lastBackup: '',      // ISO-Datum des letzten JSON-Backups
-    tableLayout: 'standard',  // 'standard' | 'invers' (Notentabelle)
+    tableLayout: 'invers',    // 'invers' (Standard: Gesamt und Neuestes zuerst) | 'standard' (von links nach rechts)
     halfYear: 'auto',    // 'auto' | '1' | '2' — Halbjahr beim Öffnen eines Kurses
     categories: [],      // eigene Notenkategorien { id, name, color } (siehe „Notenkategorien")
   },
@@ -2317,8 +2317,8 @@ function renderTable(c) {
   const zwOf = id => zwCols.filter(x => (x.source || 'gesamt') === id);
   const showHA = (c.haLog || []).length > 0;
 
-  // Invertierte Listen-Ansicht: Gesamt/Ø/Neuestes zuerst links
-  const inverted = data.meta.tableLayout === 'invers';
+  // Standard-Ansicht: Gesamt/Ø/Neuestes zuerst links; 'standard' = von links nach rechts (Altwert)
+  const inverted = data.meta.tableLayout !== 'standard';
   const isZw = col => col.type === 'zwischenstand';
   const byNewest = (a, b) => (b.date || '').localeCompare(a.date || '');
   const byNewestZw = (a, b) => byNewest(a, b) || isZw(b) - isZw(a);   // gleiches Datum: Zwischenstand vor den Noten

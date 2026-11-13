@@ -44,7 +44,7 @@ function renderSettings() {
   const meta = SET_PAGES.find(p => p.key === shown);
 
   app().innerHTML = `
-    <div class="page-head"><div><h1>Einstellungen</h1><div class="sub">Änderungen werden sofort gespeichert.</div></div></div>
+    <div class="page-head"><div><h1>Einstellungen</h1></div></div>
     <div class="set-layout ${page ? 'has-page' : 'no-page'}">
       <nav class="set-nav" aria-label="Bereiche">${nav}</nav>
       <div class="set-content ${shown === 'raster' ? 'wide' : ''}">
@@ -114,7 +114,6 @@ function setStundenplan(body) {
       </div>
       <div class="field"><label>Im Kalender des Geräts</label>
         <div class="set-buttons"><button class="btn" id="mTtIcs">Als Kalenderdatei sichern (.ics)</button></div>
-        <div class="hint">In den Kalender importiert, zeigt dann das Kalender-Widget die nächste Stunde. Wiederholt sich wöchentlich bis zu den nächsten Ferien. Nach Änderungen neu importieren.</div>
       </div>
     </section>`;
   const abSel = document.getElementById('mAB'), abWrap = document.getElementById('mABWeekWrap'), abWeek = document.getElementById('mABWeek');
@@ -146,8 +145,8 @@ function setNoten(body) {
       </div>
       <div class="field"><label>Notentabelle</label>
         <select id="mLayout">
-          <option value="standard" ${(m.tableLayout || 'standard') !== 'invers' ? 'selected' : ''}>Standard — Noten links, Gesamt rechts</option>
-          <option value="invers" ${m.tableLayout === 'invers' ? 'selected' : ''}>Invertiert — Gesamt und Neuestes zuerst</option>
+          <option value="invers" ${m.tableLayout !== 'standard' ? 'selected' : ''}>Standard — Gesamt und Neuestes zuerst</option>
+          <option value="standard" ${m.tableLayout === 'standard' ? 'selected' : ''}>Von links nach rechts — Noten links, Gesamt rechts</option>
         </select>
       </div>
       <div class="field"><label>Hinweis „keine aktuelle mündliche Note"</label>
@@ -165,7 +164,7 @@ function setNoten(body) {
       <div class="field"><label>1. Halbjahr % (Endjahr)</label><input id="mWH" type="number" min="0" max="100" value="${cd.weightHY1}"></div>
       <div class="hint" style="margin-top:6px">Die Gewichtung der Kategorien steht unter <a href="#" id="mToCats">Notenkategorien</a>. Bestehende Kurse bleiben unverändert — dort unter <b>Mehr → Kurs bearbeiten</b>.</div>
     </section>`;
-  document.getElementById('mLayout').onchange = e => { m.tableLayout = e.target.value || 'standard'; setSaved(); };
+  document.getElementById('mLayout').onchange = e => { m.tableLayout = e.target.value || 'invers'; setSaved(); };
   document.getElementById('mTheme').onchange = e => { m.theme = e.target.value; applyTheme(); setSaved(); };
   document.getElementById('mBlind').onchange = e => { m.blindDays = Number(e.target.value) || 21; setSaved(); };
   const keep = () => {
@@ -413,7 +412,7 @@ function setUeber(body) {
     </section>
     <section class="set-card">
       <h2>Pult.</h2>
-      <div class="hint" style="font-size:13px">Ein Lehreralltagshelfer für Noten, Stundenplan, Todos und Termine. Alle Daten bleiben auf diesem Gerät — es gibt keinen Server, der sie sieht.</div>
+      <div class="hint" style="font-size:13px">Ein Lehreralltagshelfer für Noten, Stundenplan, Todos und Termine. Es werden alle Daten auf dem Gerät gespeichert und nicht übertragen.</div>
       <div class="set-buttons" style="margin-top:12px">
         <a class="btn" href="${LEGAL_URL}" target="_blank" rel="noopener">Datenschutz &amp; Impressum</a>
         <button class="btn" id="mWelcome">Hinweise zur Installation</button>
