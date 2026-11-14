@@ -213,6 +213,7 @@ main {
 .seg button { appearance: none; border: none; background: var(--card); font: inherit; font-weight: 600; font-size: 14px; padding: 0 14px; min-height: 38px; cursor: pointer; color: var(--ink-soft); border-right: 1px solid var(--line); }
 .seg button:last-child { border-right: none; }
 .seg button.active { background: var(--accent); color: #fff; }
+.seg button:disabled { opacity: .5; cursor: default; }
 
 /* ---------- Grade table ---------- */
 .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); box-shadow: var(--shadow); -webkit-overflow-scrolling: touch; }
@@ -633,12 +634,15 @@ td.tt-cell.tt-today { background: var(--today, #f2f8f6); }
   padding: 2px 4px; border-radius: 4px; opacity: .75;
   background: rgba(255,255,255,.65); color: inherit;
 }
-/* „jetzt" im A/B-Umschalter — markiert die laufende Woche */
-.tab .tt-now {
-  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
-  padding: 1px 5px; margin-left: 6px; border-radius: 999px;
-  background: var(--accent-soft); color: var(--accent-ink);
+/* A/B-Woche in der Ecke des Stundenplans — antippen wechselt zur anderen Woche */
+.tt-week-badge {
+  appearance: none; border: 0; cursor: pointer; font: inherit;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: 6px;
+  background: var(--accent); color: #fff; font-size: 16px; font-weight: 800; line-height: 1;
 }
+.tt-week-badge:hover { filter: brightness(1.12); }
+.tt-week-badge:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 td.tt-cell.tt-editable { background: repeating-linear-gradient(45deg, var(--card-2), var(--card-2) 6px, var(--hover) 6px, var(--hover) 12px); }
 td.tt-cell.tt-editable.tt-today { background: var(--today, #eef6f2); }
 .tt-add {
@@ -919,6 +923,11 @@ table.rs-ed-grid textarea { min-height: 120px; font-size: 13px; line-height: 1.4
 .set-nav-item .upd-dot.warn { background: var(--amber); }
 .upd-cur { display: flex; flex-direction: column; gap: 2px; font-size: 15px; }
 .upd-cur .cs-sub { font-size: 12.5px; color: var(--ink-faint); }
+/* Speicher: Größe des Datenbestands als Kennzahl */
+.store-stats { display: flex; flex-wrap: wrap; gap: 10px 28px; align-items: flex-end; }
+.store-val { font-size: 20px; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; color: var(--ink); }
+.store-stat.main .store-val { font-size: 30px; font-weight: 720; }
+.store-lbl { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-faint); margin-top: 3px; }
 .set-card > .hint { font-size: 12px; color: var(--ink-faint); line-height: 1.45; }
 #mPersist .btn { margin: 6px 0 0; }
 #mPersist { font-size: 14px; color: var(--ink-soft); }
@@ -937,6 +946,20 @@ table.rs-ed-grid textarea { min-height: 120px; font-size: 13px; line-height: 1.4
 .upd-log { margin-top: 14px; }
 .upd-log + .upd-log { margin-top: 8px; }
 .upd-log summary { cursor: pointer; font-size: 14px; font-weight: 600; color: var(--ink-soft); }
+/* Lizenz-Kachel unter Über Pult. */
+.lic-own { display: flex; flex-direction: column; gap: 2px; font-size: 15px; }
+.lic-own .cs-sub, .lic-libs .cs-sub { font-size: 12.5px; color: var(--ink-faint); }
+.lic-text {
+  margin: 8px 0 0; padding: 10px 12px; max-height: 260px; overflow: auto;
+  white-space: pre-wrap; word-break: break-word; font-size: 11.5px; line-height: 1.45;
+  background: var(--card-2); border: 1px solid var(--line-soft); border-radius: var(--radius); color: var(--ink-soft);
+}
+.lic-libs { margin: 8px 0 8px; padding-left: 20px; font-size: 14px; }
+.lic-libs li { display: list-item; }
+.lic-libs li + li { margin-top: 6px; }
+.lic-libs .cs-sub { display: block; }
+.lic-libs a { color: var(--accent); text-decoration: none; }
+.lic-libs a:hover { text-decoration: underline; }
 
 /* ---------- Werkzeuge: Gruppen, Zufall, Timer ---------- */
 .grp-layout { display: grid; grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); gap: 20px; align-items: start; }
@@ -1042,6 +1065,13 @@ body.in-archive main { padding-bottom: 140px; }
 .yc-row { display: grid; grid-template-columns: 1fr 90px; gap: 8px; align-items: center; }
 .yc-row input[type=text] { min-height: 36px; padding: 6px 8px; }
 .chip.snap-keep { border-left: 4px solid var(--amber); }
+/* Sicherungsstände: Archive und automatische Stände getrennt */
+.snap-group + .snap-group { margin-top: 18px; }
+.snap-head { font-size: 14px; font-weight: 650; color: var(--ink-soft); margin: 0 0 8px; display: flex; align-items: center; gap: 6px; }
+.snap-count {
+  font-size: 11px; font-weight: 700; min-width: 18px; padding: 1px 6px; border-radius: 999px; text-align: center;
+  background: var(--hover); color: var(--ink-faint);
+}
 
 .bk-or { text-align: center; color: var(--ink-faint); font-size: 13px; margin: 12px 0 6px; }
 

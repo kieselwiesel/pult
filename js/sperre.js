@@ -426,18 +426,12 @@ function lockSettingsHtml() {
         </div>
         <div class="field">
           <label>Beim Öffnen der App</label>
-          <select id="lkStart">
-            <option value="1" ${lockCfg.onStart ? 'selected' : ''}>Immer sperren</option>
-            <option value="0" ${lockCfg.onStart ? '' : 'selected'}>Nur sperren, wenn die Zeit oben abgelaufen ist</option>
-          </select>
-          <div class="hint">iPadOS beendet Web-Apps im Hintergrund oft von selbst — dann zählt das Zurückkehren als Öffnen.</div>
+          ${pdSeg('lkStart', [['1', 'Immer sperren'], ['0', 'Nur nach Ablauf der Zeit']], lockCfg.onStart ? '1' : '0')}
+          <div class="hint">„Nur nach Ablauf der Zeit": gesperrt wird nur, wenn die Zeit unter „Automatisch sperren" abgelaufen ist. iPadOS beendet Web-Apps im Hintergrund oft von selbst — dann zählt das Zurückkehren als Öffnen.</div>
         </div>
         <div class="field">
           <label>${bioName()}</label>
-          <select id="lkBio" disabled>
-            <option value="0" ${lockCfg.credId ? '' : 'selected'}>Aus — nur Code</option>
-            <option value="1" ${lockCfg.credId ? 'selected' : ''}>An — Code bleibt als Ausweichweg</option>
-          </select>
+          ${pdSeg('lkBio', [['0', 'Aus — nur Code'], ['1', 'An — Code als Ausweichweg']], lockCfg.credId ? '1' : '0').replace(/<button /g, '<button disabled ')}
           <div class="hint" id="lkBioHint">Wird geprüft …</div>
         </div>
         <div class="field">
@@ -461,7 +455,7 @@ function bindLockSettings() {
     return;
   }
   $('lkAuto').onchange = e => { lockCfg.autoLock = Number(e.target.value); saveLock(); toast('Gespeichert.'); };
-  $('lkStart').onchange = e => { lockCfg.onStart = e.target.value === '1'; saveLock(); toast('Gespeichert.'); };
+  pdBindSeg('lkStart', v => { lockCfg.onStart = v === '1'; saveLock(); toast('Gespeichert.'); });
   $('lkNow').onclick = () => lockNow(false);
   $('lkChange').onclick = () => requirePin('Aktuellen Code eingeben', () =>
     pinScreen({ mode: 'setup', onDone: async pin => { await setPin(pin); saveLock(); toast('Code geändert.'); } }));
@@ -470,9 +464,11 @@ function bindLockSettings() {
     render(); toast('App-Sperre ausgeschaltet.');
   });
 
-  const bioSel = $('lkBio'), bioHint = $('lkBioHint');
+  const bioSeg = $('lkBio'), bioHint = $('lkBioHint');
+  const bioBtns = () => bioSeg.querySelectorAll('button');
+  const bioShow = on => bioBtns().forEach(b => b.classList.toggle('active', b.dataset.v === (on ? '1' : '0')));
   bioAvailable().then(ok => {
-    if (!bioSel.isConnected) return;
+    if (!bioSeg.isConnected) return;
     if (!bioSupported()) {
       bioHint.textContent = window.isSecureContext
         ? 'Dieser Browser unterstützt keine Passkeys (WebAuthn).'
@@ -482,18 +478,21 @@ function bindLockSettings() {
     /* Auch wenn das Gerät „nicht verfügbar" meldet, darf man es versuchen:
        Verwaltete Geräte melden das teils, obwohl Touch ID eingerichtet ist —
        der Fehler beim Einrichten sagt dann mehr. */
-    bioSel.disabled = false;
+    bioBtns().forEach(b => { b.disabled = false; });
     bioHint.textContent = ok
       ? 'Beim Entsperren erscheint die Abfrage automatisch; das Symbol links neben der 0 startet sie erneut.'
       : `Das Gerät meldet keine Entsperrung für Websites. Häufige Ursachen: kein Gerätecode, iCloud-Schlüsselbund aus oder auf verwalteten Geräten per Profil gesperrt. Einrichten kann trotzdem versucht werden.`;
   });
-  bioSel.onchange = async () => {
-    if (bioSel.value === '0') { lockCfg.credId = ''; saveLock(); toast('Gespeichert.'); return; }
+  bioBtns().forEach(b => b.onclick = async () => {
+    const on = b.dataset.v === '1';
+    if (on === !!lockCfg.credId) return;
+    bioShow(on);
+    if (!on) { lockCfg.credId = ''; saveLock(); toast('Gespeichert.'); return; }
     try { await bioRegister(); toast(`${bioName()} eingerichtet.`); }
     catch (e) {
-      bioSel.value = '0';
+      bioShow(false);
       toast(`${bioName()} konnte nicht eingerichtet werden.`);
       bioHint.textContent = `Einrichten fehlgeschlagen: ${e.name || 'Fehler'}${e.message ? ' — ' + e.message : ''}`;
     }
-  };
+  });
 }

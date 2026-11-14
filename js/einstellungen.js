@@ -19,7 +19,7 @@ const SET_PAGES = [
   { key: 'raster',      title: 'Bewertungsraster', sub: 'Vorlagen für Einschätzungen' },
   { key: 'sicherheit',  title: 'Sicherheit',       sub: 'App-Sperre' },
   { key: 'daten',       title: 'Daten',            sub: 'Backup, Sicherungsstände, Speicher' },
-  { key: 'ueber',       title: 'Über Pult.',       sub: 'Version, Updates, Datenschutz' },
+  { key: 'ueber',       title: 'Über Pult.',       sub: 'Version, Updates, Datenschutz, Lizenz' },
 ];
 
 /* Vorgaben für neue Kurse */
@@ -100,11 +100,8 @@ function setSchuljahr(body) {
     <section class="set-card">
       <div class="field"><label>Nächste Zeugniskonferenz</label><input id="mZeugnis" type="date" value="${m.zeugnisDatum || ''}"></div>
       <div class="field"><label>Halbjahr beim Öffnen eines Kurses</label>
-        <select id="mHalfYear">
-          <option value="auto" ${(m.halfYear || 'auto') === 'auto' ? 'selected' : ''}>Automatisch — das 2., sobald dort Noten stehen</option>
-          <option value="1" ${m.halfYear === '1' ? 'selected' : ''}>Immer das 1. Halbjahr</option>
-          <option value="2" ${m.halfYear === '2' ? 'selected' : ''}>Immer das 2. Halbjahr</option>
-        </select>
+        ${pdSeg('mHalfYear', [['auto', 'Automatisch'], ['1', '1. Halbjahr'], ['2', '2. Halbjahr']], m.halfYear || 'auto')}
+        <div class="hint">Automatisch: das 2. Halbjahr, sobald dort Noten stehen.</div>
       </div>
     </section>`;
   document.getElementById('fdNew').onclick = () => openFreeDayForm(null);
@@ -125,7 +122,7 @@ function setSchuljahr(body) {
   document.getElementById('fdIcs').onclick = () => file.click();
   file.onchange = () => { const f = file.files[0]; if (f) f.text().then(importFreeDaysICS, () => toast('Die Datei konnte nicht gelesen werden.')); };
   document.getElementById('mZeugnis').onchange = e => { m.zeugnisDatum = e.target.value; setSaved(); };
-  document.getElementById('mHalfYear').onchange = e => { m.halfYear = e.target.value || 'auto'; setSaved(); };
+  pdBindSeg('mHalfYear', v => { m.halfYear = v || 'auto'; setSaved(); });
 }
 
 /* Ferien / freien Tag anlegen oder ändern */
@@ -198,24 +195,15 @@ function setStundenplan(body) {
   body.innerHTML = `
     <section class="set-card">
       <div class="field"><label>Rhythmus</label>
-        <select id="mAB">
-          <option value="0" ${abActive() ? '' : 'selected'}>Jede Woche derselbe Plan</option>
-          <option value="1" ${abActive() ? 'selected' : ''}>Woche A und Woche B im Wechsel</option>
-        </select>
+        ${pdSeg('mAB', [['0', 'Jede Woche gleich'], ['1', 'Woche A und B im Wechsel']], abActive() ? '1' : '0')}
       </div>
       <div class="field" id="mABWeekWrap" style="${abActive() ? '' : 'display:none'}"><label>Diese Woche ist</label>
-        <select id="mABWeek">
-          <option value="1" ${abActive() && abWeekOf() === 2 ? '' : 'selected'}>Woche A</option>
-          <option value="2" ${abActive() && abWeekOf() === 2 ? 'selected' : ''}>Woche B</option>
-        </select>
+        ${pdSeg('mABWeek', [['1', 'Woche A'], ['2', 'Woche B']], abActive() && abWeekOf() === 2 ? '2' : '1')}
         <div class="hint">Danach wechselt es jede Woche automatisch. Einzelne Stunden setzt du im Plan auf A oder B.</div>
       </div>
       <div class="field" id="mABSkipWrap" style="${abActive() ? '' : 'display:none'}"><label>In den Ferien</label>
-        <select id="mABSkip">
-          <option value="0" ${data.timetable.abSkipFree ? '' : 'selected'}>A/B wechselt weiter, auch in den Ferien</option>
-          <option value="1" ${data.timetable.abSkipFree ? 'selected' : ''}>A/B pausiert — nach den Ferien geht es weiter, wo es aufgehört hat</option>
-        </select>
-        <div class="hint">Als Ferien zählt eine Woche, die Montag bis Freitag frei ist (Einstellungen → Schuljahr).</div>
+        ${pdSeg('mABSkip', [['0', 'Weiter wechseln'], ['1', 'Pausieren']], data.timetable.abSkipFree ? '1' : '0')}
+        <div class="hint">Pausieren: Nach den Ferien geht es mit der Woche weiter, mit der es aufgehört hat. Als Ferien zählt eine Woche, die Montag bis Freitag frei ist (Einstellungen → Schuljahr).</div>
       </div>
       <div class="field"><label>Stundenzeiten</label>
         <div class="set-buttons"><button class="btn" id="mPeriods">Zeiten bearbeiten</button></div>
@@ -225,27 +213,26 @@ function setStundenplan(body) {
         <div class="set-buttons"><button class="btn" id="mTtIcs">Als Kalenderdatei sichern (.ics)</button></div>
       </div>
     </section>`;
-  const abSel = document.getElementById('mAB'), abWrap = document.getElementById('mABWeekWrap'), abWeek = document.getElementById('mABWeek');
-  const skipWrap = document.getElementById('mABSkipWrap');
+  const abWrap = document.getElementById('mABWeekWrap'), skipWrap = document.getElementById('mABSkipWrap');
+  let wantAB = abActive(), abWeek = abActive() && abWeekOf() === 2 ? 2 : 1;
   const applyAB = () => {
-    const wantAB = abSel.value === '1';
     abWrap.style.display = wantAB ? '' : 'none';
     skipWrap.style.display = wantAB ? '' : 'none';
     data.timetable.abWeeks = wantAB;
-    if (wantAB) abSetCurrentWeek(Number(abWeek.value) || 1);
+    if (wantAB) abSetCurrentWeek(abWeek);
     planWeek = 0;                          // Stundenplan wieder auf die laufende Woche
     setSaved();
   };
-  abSel.onchange = applyAB;
-  abWeek.onchange = applyAB;
+  pdBindSeg('mAB', v => { wantAB = v === '1'; applyAB(); });
+  pdBindSeg('mABWeek', v => { abWeek = Number(v) || 1; applyAB(); });
   /* Umschalten lässt die laufende Woche, wie sie ist */
-  document.getElementById('mABSkip').onchange = e => {
+  pdBindSeg('mABSkip', v => {
     const cur = abWeekOf();
-    data.timetable.abSkipFree = e.target.value === '1';
+    data.timetable.abSkipFree = v === '1';
     abSetCurrentWeek(cur);
     planWeek = 0;
     setSaved();
-  };
+  });
   document.getElementById('mPeriods').onclick = openPeriodsEditor;
   document.getElementById('mTtIcs').onclick = exportTimetableICS;
 }
@@ -256,25 +243,20 @@ function setDarstellung(body) {
   body.innerHTML = `
     <section class="set-card">
       <div class="field"><label>Erscheinungsbild</label>
-        <select id="mTheme">
-          <option value="auto" ${(m.theme || 'auto') === 'auto' ? 'selected' : ''}>Automatisch — wie das Gerät</option>
-          <option value="light" ${m.theme === 'light' ? 'selected' : ''}>Hell</option>
-          <option value="dark" ${m.theme === 'dark' ? 'selected' : ''}>Dunkel</option>
-        </select>
+        ${pdSeg('mTheme', [['auto', 'Automatisch'], ['light', 'Hell'], ['dark', 'Dunkel']], m.theme || 'auto')}
+        <div class="hint">Automatisch folgt der Einstellung des Geräts.</div>
       </div>
       <div class="field"><label>Notentabelle</label>
-        <select id="mLayout">
-          <option value="invers" ${m.tableLayout !== 'standard' ? 'selected' : ''}>Standard — Gesamt und Neuestes zuerst</option>
-          <option value="standard" ${m.tableLayout === 'standard' ? 'selected' : ''}>Von links nach rechts — Noten links, Gesamt rechts</option>
-        </select>
+        ${pdSeg('mLayout', [['invers', 'Gesamt zuerst'], ['standard', 'Von links nach rechts']], m.tableLayout === 'standard' ? 'standard' : 'invers')}
+        <div class="hint">Gesamt zuerst: Gesamtnote und neueste Noten stehen links. Von links nach rechts: Noten in zeitlicher Folge, Gesamt rechts.</div>
       </div>
       <div class="field"><label>Hinweis „keine aktuelle mündliche Note"</label>
         <select id="mBlind">${[14, 21, 28, 42].map(d => `<option value="${d}" ${blindDays() === d ? 'selected' : ''}>nach ${d} Tagen</option>`).join('')}</select>
         <div class="hint">Markiert Schüler:innen mit einem Punkt, deren letzte mündliche Note länger zurückliegt.</div>
       </div>
     </section>`;
-  document.getElementById('mTheme').onchange = e => { m.theme = e.target.value; applyTheme(); setSaved(); };
-  document.getElementById('mLayout').onchange = e => { m.tableLayout = e.target.value || 'invers'; setSaved(); };
+  pdBindSeg('mTheme', v => { m.theme = v; applyTheme(); setSaved(); });
+  pdBindSeg('mLayout', v => { m.tableLayout = v || 'invers'; setSaved(); });
   document.getElementById('mBlind').onchange = e => { m.blindDays = Number(e.target.value) || 21; setSaved(); };
 }
 
@@ -317,22 +299,21 @@ function setNoten(body) {
     <section class="set-card">
       <h2>Vorgaben für neue Kurse</h2>
       <div class="field"><label>Notensystem</label>
-        <select id="mScale">
-          <option value="punkte" ${cd0.scale === 'punkte' ? 'selected' : ''}>Punkte 0–15</option>
-          <option value="noten" ${cd0.scale === 'noten' ? 'selected' : ''}>Noten 1–6 mit Tendenz</option>
-        </select></div>
+        ${pdSeg('mScale', [['punkte', 'Punkte 0–15'], ['noten', 'Noten 1–6 mit Tendenz']], cd0.scale === 'noten' ? 'noten' : 'punkte')}</div>
       <div class="field"><label>Gewichtung der Kategorien</label><div id="kDefaults"></div></div>
       <div class="field"><label>1. Halbjahr % (Endjahr)</label><input id="mWH" type="number" min="0" max="100" value="${cd0.weightHY1}"></div>
       <div class="hint" style="margin-top:6px">Eigene Kategorien mit 0 % werden in neuen Kursen nicht angelegt. Bestehende Kurse bleiben unverändert — dort unter <b>Mehr → Kurs bearbeiten</b>.</div>
     </section>`;
+  let scale = cd0.scale === 'noten' ? 'noten' : 'punkte';
   const keepDefaults = () => {
     m.courseDefaults = Object.assign({}, m.courseDefaults || {}, {
-      scale: val('mScale') || 'punkte',
+      scale,
       weightHY1: clamp(parseInt(val('mWH'), 10) || 0, 0, 100),
     });
     setSaved();
   };
-  ['mScale', 'mWH'].forEach(id => document.getElementById(id).onchange = keepDefaults);
+  pdBindSeg('mScale', v => { scale = v || 'punkte'; keepDefaults(); });
+  document.getElementById('mWH').onchange = keepDefaults;
   document.getElementById('kNew').onclick = () => openCategoryForm(null, () => { closeModal(); renderSettings(); }, closeModal);
   body.querySelectorAll('[data-kedit]').forEach(b => b.onclick = () => openCategoryForm(b.dataset.kedit, () => { closeModal(); renderSettings(); }, closeModal));
   body.querySelectorAll('[data-kdel]').forEach(b => b.onclick = () => openCategoryDelete(b.dataset.kdel));
@@ -454,10 +435,12 @@ function setDaten(body) {
 
     <section class="set-card">
       <h2>Speicher</h2>
-      <div class="field">
-        <div id="mPersist" class="cs-sub">Wird geprüft …</div>
-        <div class="hint">Datenbestand: ${fmtBytes(usage)} · ${data.courses.length} Kurse · ${data.courses.reduce((a, c) => a + c.students.length, 0)} Schüler:innen.</div>
+      <div class="store-stats">
+        <div class="store-stat main"><div class="store-val">${fmtBytes(usage)}</div><div class="store-lbl">Datenbestand</div></div>
+        <div class="store-stat"><div class="store-val">${data.courses.length}</div><div class="store-lbl">${data.courses.length === 1 ? 'Kurs' : 'Kurse'}</div></div>
+        <div class="store-stat"><div class="store-val">${data.courses.reduce((a, c) => a + c.students.length, 0)}</div><div class="store-lbl">Schüler:innen</div></div>
       </div>
+      <div id="mPersist" class="cs-sub" style="margin-top:12px">Wird geprüft …</div>
     </section>
 
     <section class="set-card">
@@ -502,24 +485,81 @@ function setDaten(body) {
     catch (e) { toast('Interne Sicherung ist in diesem Browser nicht möglich.'); }
   };
 
+  /* Dauerhaften Speicher gewähren Browser vor allem installierten Web-Apps —
+     als Web-App fragt Pult. beim Start selbst danach (pult.js) */
   const persistEl = document.getElementById('mPersist');
   const showPersist = st => {
     if (!persistEl.isConnected) return;
-    persistEl.innerHTML = st === true
+    const app = isStandalone();
+    /* „Dauerhaft anfordern" nur, wenn der Browser die Abfrage kennt (st === false) */
+    const ask = st === false ? '<button class="btn small" id="mPersistAsk">Dauerhaft anfordern</button>' : '';
+    const how = app ? '' : '<button class="btn small" id="mPersistHow">So geht\'s</button>';
+    const buttons = ask || how ? `<div class="set-buttons" style="margin-top:8px">${ask}${how}</div>` : '';
+    persistEl.innerHTML = (st === true
       ? '<b style="color:var(--g-top)">Dauerhaft gespeichert</b> — der Browser räumt die Daten nicht von selbst weg.'
-      : st === null ? 'Dieser Browser gibt keine Auskunft, ob die Daten dauerhaft bleiben.'
-      : `<b style="color:var(--amber)">Nicht dauerhaft</b> — bei Speichermangel dürfte der Browser aufräumen.<br><button class="btn small" id="mPersistAsk">Dauerhaft anfordern</button>`;
-    const ask = document.getElementById('mPersistAsk');
-    if (ask) ask.onclick = async () => {
+      : app
+        ? (st === null ? 'Pult. läuft als Web-App. Dieser Browser gibt keine Auskunft, ob die Daten dauerhaft bleiben — sichere regelmäßig ein Backup.'
+          : '<b style="color:var(--amber)">Nicht dauerhaft</b> — der Browser könnte bei Speichermangel aufräumen. Sichere regelmäßig ein Backup.')
+        : '<b style="color:var(--amber)">Füge Pult. als Web-App hinzu, um keine Daten zu verlieren.</b> Im Browser-Tab kann der Browser die Daten bei Speichermangel oder längerer Nichtnutzung löschen.')
+      + (st === true ? '' : buttons);
+    const h = document.getElementById('mPersistHow');
+    if (h) h.onclick = openWelcome;
+    const a = document.getElementById('mPersistAsk');
+    if (a) a.onclick = async () => {
       const r = await storagePersist(true);
       showPersist(r);
-      if (!r) toast('Abgelehnt — als Web-App zum Home-Bildschirm hinzufügen hilft meist.');
+      toast(r ? 'Daten werden jetzt dauerhaft gespeichert.' : app ? 'Der Browser hat abgelehnt.' : 'Der Browser hat abgelehnt — als Web-App hinzufügen hilft meist.');
     };
   };
   storagePersist(false).then(showPersist);
 }
 
 /* ---------- Über Pult. ---------- */
+const REPO_URL = 'https://github.com/kieselwiesel/pult';
+const LICENSE_HOLDER = 'Alexander Schrickel';
+const LICENSE_SINCE = 2026;
+/* mitgelieferte Bibliotheken (js/vendor) — ihre vollständigen Lizenzhinweise
+   stehen im Kopf der jeweiligen Datei und bleiben dort erhalten */
+const VENDOR_LIBS = [
+  { name: 'jsPDF', version: '2.5.2', license: 'MIT', url: 'https://github.com/parallax/jsPDF',
+    holder: ['(c) 2010-2025 James Hall, https://github.com/MrRio/jsPDF', '(c) 2015-2025 yWorks GmbH, https://www.yworks.com/'], use: 'PDF erstellen' },
+  { name: 'html2canvas', version: '1.4.1', license: 'MIT', url: 'https://github.com/niklasvh/html2canvas',
+    holder: ['Copyright (c) 2012 Niklas von Hertzen'], use: 'Seiten für das PDF abbilden' },
+];
+const MIT_TEXT = `Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.`;
+
+function licenseCardHtml() {
+  const y = new Date().getFullYear();
+  const years = y > LICENSE_SINCE ? `${LICENSE_SINCE}–${y}` : `${LICENSE_SINCE}`;
+  return `
+    <section class="set-card">
+      <h2>Lizenz</h2>
+      <div class="lic-own"><b>© ${years} ${esc(LICENSE_HOLDER)}</b>
+        <span class="cs-sub">Pult. ist freie Software unter der MIT-Lizenz — der Quellcode ist offen einsehbar.</span></div>
+      <div class="set-buttons" style="margin-top:12px">
+        <a class="btn" href="${REPO_URL}" target="_blank" rel="noopener">Quellcode auf GitHub</a>
+        <button class="btn" id="mSupport" aria-expanded="false" aria-controls="supportNote">Pult. unterstützen</button>
+      </div>
+      <div class="hint" id="supportNote" hidden style="margin-top:8px">Zur Zeit ist noch keine Unterstützungsmöglichkeit eingebaut, aber danke!</div>
+      <details class="upd-log"><summary>Lizenztext (MIT)</summary>
+        <pre class="lic-text">MIT License
+
+Copyright (c) ${years} ${esc(LICENSE_HOLDER)}
+
+${esc(MIT_TEXT)}</pre>
+      </details>
+      <details class="upd-log"><summary>Verwendete Bibliotheken (${VENDOR_LIBS.length})</summary>
+        <ul class="lic-libs">${VENDOR_LIBS.map(l => `<li>
+          <a href="${l.url}" target="_blank" rel="noopener"><b>${esc(l.name)}</b></a> ${esc(l.version)} · ${esc(l.license)}-Lizenz
+          <span class="cs-sub">${esc(l.use)}</span>${l.holder.map(h => `<span class="cs-sub">${esc(h)}</span>`).join('')}</li>`).join('')}</ul>
+      </details>
+    </section>`;
+}
+
 function setUeber(body) {
   body.innerHTML = `
     <section class="set-card">
@@ -532,7 +572,13 @@ function setUeber(body) {
         <a class="btn" href="${LEGAL_URL}" target="_blank" rel="noopener">Datenschutz &amp; Impressum</a>
         <button class="btn" id="mWelcome">Hinweise zur Installation</button>
       </div>
-    </section>`;
+    </section>
+    ${licenseCardHtml()}`;
   bindUpdateSection();
   document.getElementById('mWelcome').onclick = openWelcome;
+  document.getElementById('mSupport').onclick = e => {
+    const note = document.getElementById('supportNote');
+    note.hidden = !note.hidden;
+    e.currentTarget.setAttribute('aria-expanded', String(!note.hidden));
+  };
 }

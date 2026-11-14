@@ -1434,7 +1434,6 @@ function backupAgeText() {
 
 function renderHome() {
   const ab = abActive();
-  const curWeek = ab ? abWeekOf() : 0;
   if (!Number.isInteger(planWeek)) planWeek = 0;
   /* gezeigte Woche: die laufende, verschoben um planWeek Wochen */
   const monday = mondayOf();
@@ -1516,14 +1515,13 @@ function renderHome() {
   const rel = planWeek === 1 ? 'Nächste Woche' : planWeek === -1 ? 'Letzte Woche'
     : planWeek > 0 ? `In ${planWeek} Wochen` : `Vor ${-planWeek} Wochen`;
   const todayLabel = planWeek
-    ? `${rel} · ${fmtDate(isoForWeekday(monday, 1))} – ${fmtDateLong(isoForWeekday(monday, 5))}` + (ab ? ` · Woche ${AB_LABEL[week]}` : '')
-    : (wdReal ? WEEKDAYS_LONG[wdReal] + ', ' + fmtDateLong(todayISO()) : 'Wochenende — ' + fmtDateLong(todayISO()))
-      + (ab ? ` · Woche ${AB_LABEL[curWeek]}` : '');
-  const weekTabs = ab ? `
-    <div class="tabs">
-      <button class="tab ${week===1?'active':''}" data-tw="1">Woche A${curWeek===1?' <span class="tt-now">jetzt</span>':''}</button>
-      <button class="tab ${week===2?'active':''}" data-tw="2">Woche B${curWeek===2?' <span class="tt-now">jetzt</span>':''}</button>
-    </div>` : '';
+    ? `${rel} · ${fmtDate(isoForWeekday(monday, 1))} – ${fmtDateLong(isoForWeekday(monday, 5))}`
+    : (wdReal ? WEEKDAYS_LONG[wdReal] + ', ' + fmtDateLong(todayISO()) : 'Wochenende — ' + fmtDateLong(todayISO()));
+  /* Ecke oben links: im A/B-Rhythmus der Buchstabe der gezeigten Woche —
+     antippen springt zur Nachbarwoche mit dem anderen Buchstaben */
+  const corner = ab
+    ? `<button class="tt-week-badge" id="btnWeekAB" title="Woche ${AB_LABEL[week]} — zur Woche ${AB_LABEL[3 - week]} wechseln" aria-label="Woche ${AB_LABEL[week]}, zur Woche ${AB_LABEL[3 - week]} wechseln">${AB_LABEL[week]}</button>`
+    : 'Std.';
 
   app().innerHTML = `
     ${browserWarnHtml()}
@@ -1572,11 +1570,9 @@ function renderHome() {
       return txt ? `<div class="notice">${txt}</div>` : '';
     })()}
 
-    ${weekTabs}
-
     <div class="tt-wrap">
       <table class="tt">
-        <thead><tr><th class="tt-corner">Std.</th>${headDays}</tr></thead>
+        <thead><tr><th class="tt-corner">${corner}</th>${headDays}</tr></thead>
         <tbody>${bodyRows}</tbody>
       </table>
     </div>
@@ -1598,12 +1594,20 @@ function renderHome() {
   document.getElementById('btnWeekPrev').onclick = () => { planWeek--; renderHome(); };
   document.getElementById('btnWeekNext').onclick = () => { planWeek++; renderHome(); };
   document.getElementById('btnWeekNow').onclick = () => { planWeek = 0; renderHome(); };
-  /* A/B-Reiter: zur Nachbarwoche mit dem anderen Buchstaben — in Richtung der laufenden Woche */
-  app().querySelectorAll('.tab[data-tw]').forEach(t => t.onclick = () => {
-    if (+t.dataset.tw === week) return;
-    planWeek += planWeek > 0 ? -1 : 1;
+  /* A/B-Ecke: zur nächsten Woche mit dem anderen Buchstaben — in Richtung der
+     laufenden Woche; freie Wochen (abSkipFree) werden dabei übersprungen */
+  const bAB = document.getElementById('btnWeekAB');
+  if (bAB) bAB.onclick = () => {
+    const dir = planWeek > 0 ? -1 : 1;
+    let n = planWeek;
+    for (let i = 0; i < 12; i++) {
+      n += dir;
+      const m = mondayOf(); m.setDate(m.getDate() + 7 * n);
+      if (abWeekOf(dateToISO(m)) !== week) break;
+    }
+    planWeek = n;
     renderHome();
-  });
+  };
 
   app().querySelectorAll('.tt-lesson').forEach(b => b.onclick = () => {
     const day = +b.dataset.day, period = +b.dataset.period;

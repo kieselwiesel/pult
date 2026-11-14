@@ -493,22 +493,45 @@ async function dailySnapshot() {
 }
 const fmtBytes = n => (n < 1024 ? `${n} B` : n < 1048576 ? `${fmtNum(n / 1024)} KB` : `${fmtNum(n / 1048576)} MB`);
 
-/* Abschnitt „Interne Sicherungsstände" für die Einstellungen */
-async function renderSnapshotList(host) {
-  let list;
-  try { list = await listSnapshots(); }
-  catch (e) { host.innerHTML = '<div class="cs-sub">In diesem Browser nicht verfügbar (z. B. privates Fenster).</div>'; return; }
-  if (!host.isConnected) return;
-  host.innerHTML = list.length ? `<div class="chip-list">${list.map(x => `
-    <div class="chip ${x.keep ? 'snap-keep' : ''}"><div class="chip-main"><b>${x.keep ? '<span class="pill" style="font-size:10px;padding:1px 6px;margin-right:6px">Archiv</span>' : ''}${esc(x.label)}</b>
+/* Abschnitt „Interne Sicherungsstände" für die Einstellungen: getrennt nach
+   Archiven (dauerhaft) und den übrigen Ständen, je nur der neueste sichtbar —
+   der Rest hinter „Mehr anzeigen" (bleibt beim Neuzeichnen aufgeklappt) */
+const snapExpanded = new Set();   // 'archive' | 'auto'
+function snapChipHtml(x) {
+  return `
+    <div class="chip ${x.keep ? 'snap-keep' : ''}"><div class="chip-main"><b>${esc(x.label)}</b>
       <span>${fmtHistTime(x.at)} · ${x.courses} ${x.courses === 1 ? 'Kurs' : 'Kurse'} · ${fmtBytes(x.size)}</span></div>
       <div class="set-buttons">
         <button class="btn small" data-snap-view="${x.id}">Ansehen</button>
         <button class="btn small" data-snap-restore="${x.id}">Wiederherstellen</button>
         <button class="btn small" data-snap-file="${x.id}">Als Datei</button>
         <button class="btn small danger" data-snap-del="${x.id}" aria-label="Löschen">×</button>
-      </div></div>`).join('')}</div>`
-    : '<div class="cs-sub">Noch keine Sicherungsstände.</div>';
+      </div></div>`;
+}
+function snapGroupHtml(key, title, items, empty) {
+  const open = snapExpanded.has(key);
+  const shown = open ? items : items.slice(0, 1);
+  const rest = items.length - 1;
+  return `<div class="snap-group">
+    <h3 class="snap-head">${title}${items.length ? ` <span class="snap-count">${items.length}</span>` : ''}</h3>
+    ${items.length ? `<div class="chip-list">${shown.map(snapChipHtml).join('')}</div>` : `<div class="cs-sub">${empty}</div>`}
+    ${rest > 0 ? `<button class="pl-more" data-snap-more="${key}">${open ? 'Weniger anzeigen' : `Mehr anzeigen (${rest} ${rest === 1 ? 'weiterer' : 'weitere'})`}</button>` : ''}
+  </div>`;
+}
+async function renderSnapshotList(host) {
+  let list;
+  try { list = await listSnapshots(); }
+  catch (e) { host.innerHTML = '<div class="cs-sub">In diesem Browser nicht verfügbar (z. B. privates Fenster).</div>'; return; }
+  if (!host.isConnected) return;
+  host.innerHTML =
+    snapGroupHtml('archive', 'Archive', list.filter(x => x.keep),
+      'Noch keine Archive — sie entstehen beim Schuljahreswechsel oder wenn ein Backup als Archiv abgelegt wird.') +
+    snapGroupHtml('auto', 'Automatische Sicherungsstände', list.filter(x => !x.keep), 'Noch keine Sicherungsstände.');
+  host.querySelectorAll('[data-snap-more]').forEach(b => b.onclick = () => {
+    const k = b.dataset.snapMore;
+    if (snapExpanded.has(k)) snapExpanded.delete(k); else snapExpanded.add(k);
+    renderSnapshotList(host);
+  });
   host.querySelectorAll('[data-snap-restore]').forEach(b => b.onclick = async () => {
     const snap = await getSnapshot(b.dataset.snapRestore); if (!snap) return;
     modal('Stand wiederherstellen?', `<p>Pult. wird auf den Stand <b>${esc(snap.label)}</b> vom ${fmtHistTime(snap.at)} zurückgesetzt.</p>
