@@ -237,7 +237,12 @@ function setStundenplan(body) {
   document.getElementById('mTtIcs').onclick = exportTimetableICS;
 }
 
-/* ---------- Noten ---------- */
+/* Farben für Termine im Stundenplan — '' ist das Standard-Orange (--amber) */
+const TERMIN_COLORS = [
+  ['', 'Orange (Standard)'], ['#c0392b', 'Rot'], ['#b04a6a', 'Beere'], ['#7a4fb0', 'Violett'],
+  ['#2a6fb0', 'Blau'], ['#2a7f9a', 'Petrol'], ['#5f7f22', 'Oliv'], ['#6b6f78', 'Grau'],
+];
+/* ---------- Darstellung ---------- */
 function setDarstellung(body) {
   const m = data.meta;
   body.innerHTML = `
@@ -250,6 +255,11 @@ function setDarstellung(body) {
         ${pdSeg('mLayout', [['invers', 'Gesamt zuerst'], ['standard', 'Von links nach rechts']], m.tableLayout === 'standard' ? 'standard' : 'invers')}
         <div class="hint">Gesamt zuerst: Gesamtnote und neueste Noten stehen links. Von links nach rechts: Noten in zeitlicher Folge, Gesamt rechts.</div>
       </div>
+      <div class="field"><label>Farbe der Termine im Stundenplan</label>
+        <div class="cat-colors" id="mTmColor" role="radiogroup" aria-label="Farbe der Termine">${TERMIN_COLORS.map(([v, name]) =>
+          `<button type="button" class="cat-color tm-swatch ${(m.terminColor || '') === v ? 'active' : ''}" data-c="${v}" style="background:${v || 'var(--amber)'}" role="radio" aria-checked="${(m.terminColor || '') === v}" aria-label="${name}" title="${name}"></button>`).join('')}</div>
+        <div class="hint">Für das Kalenderzeichen am Tag und die Termine im Raster.</div>
+      </div>
       <div class="field"><label>Hinweis „keine aktuelle mündliche Note"</label>
         <select id="mBlind">${[14, 21, 28, 42].map(d => `<option value="${d}" ${blindDays() === d ? 'selected' : ''}>nach ${d} Tagen</option>`).join('')}</select>
         <div class="hint">Markiert Schüler:innen mit einem Punkt, deren letzte mündliche Note länger zurückliegt.</div>
@@ -257,6 +267,12 @@ function setDarstellung(body) {
     </section>`;
   pdBindSeg('mTheme', v => { m.theme = v; applyTheme(); setSaved(); });
   pdBindSeg('mLayout', v => { m.tableLayout = v || 'invers'; setSaved(); });
+  document.querySelectorAll('#mTmColor button').forEach(b => b.onclick = () => {
+    m.terminColor = b.dataset.c; applyTheme(); setSaved();
+    document.querySelectorAll('#mTmColor button').forEach(x => {
+      x.classList.toggle('active', x === b); x.setAttribute('aria-checked', String(x === b));
+    });
+  });
   document.getElementById('mBlind').onchange = e => { m.blindDays = Number(e.target.value) || 21; setSaved(); };
 }
 

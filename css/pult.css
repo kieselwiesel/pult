@@ -1254,6 +1254,59 @@ button.pl-unit-title { appearance: none; border: none; background: none; font: i
 .tt-plan.done { opacity: .55; }
 html.is-dark .tt-plan { color: var(--ink); background: rgba(0,0,0,.25); }
 /* Stundenplan: Ferien und freie Tage */
+/* ---------- Termine im Stundenplan ----------
+   Farbe: --tm (Einstellungen → Darstellung, gesetzt in applyTheme) */
+:root { --tm: var(--amber); }
+.tm-swatch { display: inline-flex; align-items: center; justify-content: center; color: #fff; }
+.tm-swatch.active::after { content: "✓"; font-size: 15px; font-weight: 800; }
+/* leuchtendes Kalenderzeichen am rechten Rand des Tageskopfs, senkrecht mittig
+   (th.tt-day ist sticky und damit Bezugsrahmen) */
+table.tt th.tt-day.has-cal { padding-left: 32px; padding-right: 32px; }
+.tt-cal {
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  appearance: none; border: none; cursor: pointer; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; border-radius: 5px;
+  background: var(--tm); color: #fff;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--tm) 25%, transparent), 0 0 9px color-mix(in srgb, var(--tm) 70%, transparent);
+}
+.tt-cal:hover { filter: brightness(1.08); }
+.tt-cal:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Feld mit Termin: freie Stunde → Block, Stunde mit Kurs → Streifen oben */
+td.tt-cell { position: relative; }
+.tt-tm-block {
+  appearance: none; font: inherit; cursor: pointer; position: relative;
+  width: 100%; height: 100%; min-height: 52px; text-align: left;
+  display: flex; flex-direction: column; justify-content: center; gap: 1px;
+  padding: 5px 8px; border-radius: var(--radius);
+  border: 1px solid color-mix(in srgb, var(--tm) 35%, transparent); border-left: 4px solid var(--tm);
+  background: color-mix(in srgb, var(--tm) 13%, var(--card)); color: var(--ink);
+}
+.tt-tm-block.cont { border-top-style: dashed; }
+.tt-tm-block:hover { background: color-mix(in srgb, var(--tm) 20%, var(--card)); }
+.tt-tm-block .tt-tm-time { font-size: 11px; font-weight: 700; color: var(--tm); font-variant-numeric: tabular-nums; }
+.tt-tm-block .tt-tm-title { font-size: 13px; font-weight: 650; line-height: 1.15; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tt-tm-block.has-more .tt-tm-title { padding-right: 22px; }
+.tt-tm-strip {
+  appearance: none; font: inherit; cursor: pointer;
+  position: absolute; top: 3px; left: 3px; right: 3px; height: 17px; z-index: 1;
+  display: flex; align-items: center; gap: 4px; padding: 0 5px;
+  border: none; border-radius: var(--radius) var(--radius) 0 0;
+  background: var(--tm); color: #fff; font-size: 10.5px; font-weight: 700; text-align: left;
+}
+.tt-tm-strip svg { flex: none; width: 11px; height: 11px; }
+.tt-tm-strip .tt-tm-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tt-tm-strip:hover { filter: brightness(1.08); }
+td.tt-cell.has-tm .tt-lesson { padding-top: 21px; }
+td.tt-cell.has-tm .tt-lesson .tt-ab { top: 22px; }
+/* weitere Termine im selben Feld: gestapelte Kante + „+n" */
+.tt-tm-more {
+  flex: none; font-size: 10px; font-weight: 800; line-height: 1; padding: 2px 4px; border-radius: 4px;
+  background: rgba(255,255,255,.3); color: inherit;
+}
+.tt-tm-block .tt-tm-more { position: absolute; top: 4px; right: 4px; background: var(--tm); color: #fff; }
+.tt-tm-block.has-more { box-shadow: 3px 3px 0 -1px var(--card), 3px 3px 0 0 color-mix(in srgb, var(--tm) 55%, transparent); }
+.chip.termin.tm-hl { border-left: 4px solid var(--tm); }
 .tt-day.tt-free .tt-free-l { display: block; font-size: 11px; font-weight: 600; color: var(--amber); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .tt-cell.tt-off { background: repeating-linear-gradient(135deg, transparent 0 6px, var(--line-soft) 6px 7px); }
 .tt-cell.tt-off .tt-lesson { opacity: .45; }
@@ -1284,6 +1337,11 @@ html.is-dark .tt-plan-ico { color: var(--ink); background: rgba(0,0,0,.35); }
   background: var(--c-bg); border: 3px solid var(--c-bar); box-shadow: 0 0 0 2px transparent; }
 .cp-sw.on { box-shadow: 0 0 0 2px var(--card), 0 0 0 4px var(--ink); }
 html.is-dark .cp-sw { background: color-mix(in srgb, var(--c-bar) 24%, var(--card)); }
+/* Werkzeuge im Kurs-Dashboard: drei gleich breite Knöpfe über den Karten */
+.kd-tools { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+.kd-tools .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: var(--tap); padding: 6px 10px; text-align: center; }
+.kd-tools .btn svg { flex: none; color: var(--accent); }
+@media (max-width: 480px) { .kd-tools .btn { flex-direction: column; gap: 4px; font-size: 13px; } }
 /* Mosaik: feine Zeilen, die Karten belegen je nach Höhe mehrere (siehe mosaic() in kurs.js) */
 .kd-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); grid-auto-rows: 4px; column-gap: 14px; row-gap: 0; grid-auto-flow: dense; }
 .kd-card { margin-bottom: 0; align-self: start; background: var(--card); box-shadow: var(--shadow); border-color: var(--line); }

@@ -15,6 +15,9 @@ function applyTheme() {
   const root = document.documentElement;
   if (t === 'auto') delete root.dataset.theme; else root.dataset.theme = t;
   root.classList.toggle('is-dark', t === 'dark' || (t === 'auto' && !!darkQuery && darkQuery.matches));
+  /* Farbe der Termine im Stundenplan (leer = Standard-Orange) */
+  const tc = data && data.meta && data.meta.terminColor;
+  if (tc && /^#[0-9a-f]{6}$/i.test(tc)) root.style.setProperty('--tm', tc); else root.style.removeProperty('--tm');
 }
 if (darkQuery && darkQuery.addEventListener) darkQuery.addEventListener('change', () => { if (typeof data !== 'undefined' && data) applyTheme(); });
 

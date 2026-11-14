@@ -1169,6 +1169,29 @@ function lessonAt(day, period, week) {
 }
 
 /* ---------- Termine: Sortierung & Filter ---------- */
+/* „HH:MM" → Minuten seit Mitternacht (null, wenn keine Uhrzeit) */
+function hmToMin(s) { const m = /^(\d{1,2}):(\d{2})/.exec(s || ''); return m ? Number(m[1]) * 60 + Number(m[2]) : null; }
+const CAL_SVG = `<svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+  <rect x="2" y="3" width="12" height="11" rx="1.5"/><path d="M2 6.6h12M5.2 1.6v2.6M10.8 1.6v2.6"/></svg>`;
+/* Termine eines Tages (aus dem Stundenplan); hl: hervorzuhebende Termine */
+function openDayTermine(iso, hl) {
+  const list = termineSorted().filter(t => t.date === iso);
+  const wd = new Date(iso + 'T12:00:00').getDay();
+  const rows = list.map(t => {
+    const c = t.courseId ? getCourse(t.courseId) : null;
+    const when = t.allDay || !t.start ? 'ganztägig' : `${t.start}${t.end ? '–' + t.end : ''} Uhr`;
+    const meta = [when, t.location ? esc(t.location) : '', c ? `${esc(c.subject)} ${esc(c.className)}` : ''].filter(Boolean).join(' · ');
+    return `<div class="chip termin ${hl && hl.includes(t.id) ? 'tm-hl' : ''}">
+      <div class="chip-main"><b>${esc(t.title)}</b><span>${meta}</span>${t.note ? `<span class="termin-note">${esc(t.note)}</span>` : ''}</div>
+      <button class="btn small" data-dt-edit="${t.id}">Ändern</button></div>`;
+  }).join('');
+  modal(`Termine · ${WEEKDAYS_LONG[wd] || ''}, ${fmtDateLong(iso)}`,
+    `<div class="chip-list">${rows || '<div class="cs-sub">Keine Termine an diesem Tag.</div>'}</div>`, [
+    { label: '+ Termin', onClick: () => openTerminForm(null, { date: iso }) },
+    { label: 'Schließen', cls: 'primary', onClick: closeModal },
+  ]);
+  document.querySelectorAll('[data-dt-edit]').forEach(b => b.onclick = () => openTerminForm(b.dataset.dtEdit));
+}
 function termineSorted() {
   return (data.termine || []).slice().sort((a, b) =>
     (a.date || '').localeCompare(b.date || '') || (a.start || '').localeCompare(b.start || ''));
@@ -1453,13 +1476,48 @@ function renderHome() {
     return `<div class="value">${txt}</div><div class="foot">${fmtDateLong(dateIso)}</div>`;
   };
 
+  /* Termine der gezeigten Woche je Wochentag (1–5), sortiert */
+  const allTermine = termineSorted();
+  const dayTermine = {};
+  [1, 2, 3, 4, 5].forEach(day => { const iso = isoForWeekday(monday, day); dayTermine[day] = allTermine.filter(t => t.date === iso); });
+  /* Termine mit Uhrzeit, die sich mit einer Stunde überschneiden (ohne Ende: 45 Minuten) */
+  const cellTermine = (day, p) => {
+    const ps = hmToMin(p && p.start), pe = hmToMin(p && p.end);
+    if (ps == null || pe == null) return [];
+    return dayTermine[day].filter(t => {
+      if (t.allDay) return false;
+      const ts = hmToMin(t.start); if (ts == null) return false;
+      let te = hmToMin(t.end); if (te == null || te <= ts) te = ts + 45;
+      return ts < pe && te > ps;
+    });
+  };
+  /* Termin im Raster: höchstens einer je Feld, weitere als „+n" */
+  const termHtml = (day, pi, occupied) => {
+    if (planEdit) return '';
+    const list = cellTermine(day, periods[pi]);
+    if (!list.length) return '';
+    const t = list[0], more = list.length - 1;
+    const iso = isoForWeekday(monday, day);
+    const tip = list.map(x => `${x.start}${x.end ? '–' + x.end : ''} ${x.title}`).join(' · ');
+    const attrs = `data-tm="${list.map(x => x.id).join(',')}" data-tm-day="${iso}" title="${esc(tip)}" aria-label="${esc((list.length > 1 ? list.length + ' Termine: ' : 'Termin: ') + tip)}"`;
+    const moreHtml = more ? `<span class="tt-tm-more">+${more}</span>` : '';
+    if (occupied) return `<button class="tt-tm-strip" ${attrs}>${CAL_SVG}<span class="tt-tm-title">${esc(t.title)}</span>${moreHtml}</button>`;
+    /* über mehrere Stunden: Titel nur im ersten Feld */
+    const prev = pi > 0 ? cellTermine(day, periods[pi - 1])[0] : null;
+    const cont = !!prev && prev.id === t.id;
+    return `<button class="tt-tm-block ${cont ? 'cont' : ''} ${more ? 'has-more' : ''}" ${attrs}>${cont ? '' :
+      `<span class="tt-tm-time">${esc(t.start)}${t.end ? '–' + esc(t.end) : ''}</span><span class="tt-tm-title">${esc(t.title)}</span>`}${moreHtml}</button>`;
+  };
+
   // Kopfzeile mit Wochentagen + Datum dieser Woche
   const headDays = WEEKDAYS.slice(1).map((wd, i) => {
     const day = i + 1;
     const iso = isoForWeekday(monday, day);
     const isToday = day === wdToday;
     const free = freeDayOf(iso);
-    return `<th class="tt-day ${isToday ? 'tt-today' : ''} ${free ? 'tt-free' : ''}"><span class="tt-wd">${wd}</span><span class="tt-date">${fmtDate(iso)}</span>${free ? `<span class="tt-free-l" title="${esc(free.label || 'frei')}">${esc(free.label || 'frei')}</span>` : ''}</th>`;
+    const nT = dayTermine[day].length;
+    const cal = nT ? `<button class="tt-cal" data-cal-day="${iso}" title="${nT === 1 ? '1 Termin' : nT + ' Termine'}" aria-label="${nT === 1 ? '1 Termin' : nT + ' Termine'} am ${esc(WEEKDAYS_LONG[day])}">${CAL_SVG}</button>` : '';
+    return `<th class="tt-day ${isToday ? 'tt-today' : ''} ${free ? 'tt-free' : ''} ${cal ? 'has-cal' : ''}">${cal}<span class="tt-wd">${wd}</span><span class="tt-date">${fmtDate(iso)}</span>${free ? `<span class="tt-free-l" title="${esc(free.label || 'frei')}">${esc(free.label || 'frei')}</span>` : ''}</th>`;
   }).join('');
 
   /* laufende Stunde (nur in der aktuellen Woche) */
@@ -1474,9 +1532,10 @@ function renderHome() {
       if (l && l.placeholder) {
         const label = esc(l.label || 'Freitext');
         const mark = ab && (l.week || 0) ? `<span class="tt-ab">${AB_LABEL[l.week]}</span>` : '';
-        return `<td class="tt-cell ${isToday ? 'tt-today' : ''} ${isNow ? 'tt-now' : ''} ${off ? 'tt-off' : ''}">
+        const tm = termHtml(day, pi, true);
+        return `<td class="tt-cell ${isToday ? 'tt-today' : ''} ${isNow ? 'tt-now' : ''} ${off ? 'tt-off' : ''} ${tm ? 'has-tm' : ''}">
           <button class="tt-lesson tt-placeholder" data-day="${day}" data-period="${pi}" ${planEdit ? '' : 'disabled'}>
-            ${mark}<span class="tt-subject">${label}</span><span class="tt-meta">${esc(l.room || '')}</span></button></td>`;
+            ${mark}<span class="tt-subject">${label}</span><span class="tt-meta">${esc(l.room || '')}</span></button>${tm}</td>`;
       }
       if (l) {
         const c = getCourse(l.courseId);
@@ -1498,12 +1557,13 @@ function renderHome() {
           if (!slot || !plansAtSlot(slot).length)
             add = `<span class="tt-plan-add" data-plan-add="${iso}|${slot ? slot.period : pi}" data-course="${c.id}" role="button" tabindex="0" title="Stunde planen" aria-label="Diese Stunde planen"><span class="tt-plan-ico">${PLAN_ADD_SVG}</span></span>`;
         }
-        return `<td class="tt-cell ${isToday ? 'tt-today' : ''} ${isNow ? 'tt-now' : ''} ${off ? 'tt-off' : ''}">
+        const tm = termHtml(day, pi, true);
+        return `<td class="tt-cell ${isToday ? 'tt-today' : ''} ${isNow ? 'tt-now' : ''} ${off ? 'tt-off' : ''} ${tm ? 'has-tm' : ''}">
           <button class="tt-lesson ${pl ? 'has-plan' : ''}" data-day="${day}" data-period="${pi}" style="--c-bg:${col.bg};--c-fg:${col.fg};--c-bar:${col.bar}">
-            ${mark}<span class="tt-subject">${label}</span><span class="tt-meta">${sub}</span>${doc}${add}</button></td>`;
+            ${mark}<span class="tt-subject">${label}</span><span class="tt-meta">${sub}</span>${doc}${add}</button>${tm}</td>`;
       }
       return `<td class="tt-cell ${isToday ? 'tt-today' : ''} ${planEdit ? 'tt-editable' : ''} ${off ? 'tt-off' : ''}">
-        ${planEdit ? `<button class="tt-add" data-day="${day}" data-period="${pi}">+</button>` : ''}</td>`;
+        ${planEdit ? `<button class="tt-add" data-day="${day}" data-period="${pi}">+</button>` : termHtml(day, pi, false)}</td>`;
     }).join('');
     return `<tr>
       <th class="tt-period"><span class="tt-pl">${esc(p.label)}</span><span class="tt-pt">${p.start || ''}</span></th>
@@ -1617,6 +1677,14 @@ function renderHome() {
     else openLessonEditor(day, period, week);
   });
   app().querySelectorAll('.tt-add').forEach(b => b.onclick = () => openLessonEditor(+b.dataset.day, +b.dataset.period, week));
+  /* Termine: Kalenderzeichen am Tag → Liste des Tages; Termin im Raster →
+     direkt bearbeiten, bei mehreren im selben Feld die Liste des Tages */
+  app().querySelectorAll('[data-cal-day]').forEach(b => b.onclick = () => openDayTermine(b.dataset.calDay));
+  app().querySelectorAll('[data-tm]').forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    const ids = b.dataset.tm.split(',');
+    if (ids.length === 1) openTerminForm(ids[0]); else openDayTermine(b.dataset.tmDay, ids);
+  });
   /* Dokument-Symbol: öffnet die Planung statt der Noten */
   app().querySelectorAll('.tt-plan').forEach(el => {
     const open = e => { e.stopPropagation(); e.preventDefault(); const p = getPlan(el.dataset.plan); if (p) go({ name: 'plan', courseId: p.courseId, planId: p.id }); };

@@ -83,6 +83,13 @@ function courseSpiegelHtml(c, vals) {
 }
 
 /* ---------- Dashboard eines Kurses ---------- */
+/* Symbole für die Werkzeug-Leiste im Kurs-Dashboard (Stil wie SEAT_ICON) */
+const KD_SVG_OPEN = '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">';
+const KD_GROUPS_SVG = `${KD_SVG_OPEN}<circle cx="4" cy="4.5" r="1.8"/><circle cx="12" cy="4.5" r="1.8"/><circle cx="8" cy="11" r="1.8"/>
+  <path d="M1.2 9.2c.5-1.3 1.5-2 2.8-2s2.3.7 2.8 2M9.2 9.2c.5-1.3 1.5-2 2.8-2s2.3.7 2.8 2"/></svg>`;
+const KD_PICK_SVG = `${KD_SVG_OPEN}<circle cx="8" cy="8" r="6.4"/><path d="M6.2 6.3a1.9 1.9 0 1 1 2.6 1.8c-.5.2-.8.6-.8 1.1v.4"/><path d="M8 11.6v.1"/></svg>`;
+const KD_TIMER_SVG = `${KD_SVG_OPEN}<circle cx="8" cy="9.2" r="5.4"/><path d="M8 9.2V6.4M6.4 1.4h3.2M8 1.4v2.4M12.4 4.3l1-1"/></svg>`;
+
 function renderKurs() {
   const c = getCourse(route.courseId);
   if (!c) return go({ name: 'kurse' });
@@ -159,6 +166,11 @@ function renderKurs() {
         <button class="btn small" id="kdEdit">Kurs bearbeiten</button>
       </div>
     </div>
+    <div class="kd-tools">
+      <button class="btn" id="kdGroups">${KD_GROUPS_SVG}<span>Gruppen bilden</span></button>
+      <button class="btn" id="kdPick">${KD_PICK_SVG}<span>Wer ist dran?</span></button>
+      <button class="btn" id="kdTimer">${KD_TIMER_SVG}<span>Timer</span></button>
+    </div>
     <div class="kd-grid">
       ${card('Unterricht', unterricht + (units.length ? `<div class="cs-sub" style="margin-top:8px">${units.length} ${units.length === 1 ? 'Einheit' : 'Einheiten'} geplant</div>` : ''), linkBtn('kdToPlan', 'Planung'))}
       ${card('Noten', noten, linkBtn('kdToNoten', 'Notentabelle'))}
@@ -183,6 +195,9 @@ function renderKurs() {
   document.getElementById('kdSeat').onclick = () => { seatPending = null; go({ name: 'seating', courseId: c.id, seatMode: initialSeatMode(c) }); };
   document.getElementById('kdStudents').onclick = () => openStudents(c, null);
   document.getElementById('kdEdit').onclick = () => openCourseForm(c);
+  document.getElementById('kdGroups').onclick = () => { groupMove = null; go({ name: 'gruppen', courseId: c.id }); };
+  document.getElementById('kdPick').onclick = () => openPicker(c);
+  document.getElementById('kdTimer').onclick = () => openTimer();
   document.getElementById('kdToTodos').onclick = () => go({ name: 'todos' });
   document.getElementById('kdNotes').onclick = () => openNotes(c, null);
   bindNoteToggles(app());
