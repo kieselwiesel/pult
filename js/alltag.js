@@ -54,7 +54,7 @@ setInterval(() => {
 const fold = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
 function openSearch() {
   modal('Suchen', `
-    <input id="srQ" type="search" placeholder="Name, Kurs oder Planung …" autocomplete="off">
+    <input id="srQ" type="search" placeholder="${planningHidden() ? 'Name oder Kurs …' : 'Name, Kurs oder Planung …'}" autocomplete="off">
     <div id="srRes" class="sr-res"></div>`, [{ label: 'Schließen', onClick: closeModal }]);
   const q = document.getElementById('srQ'), res = document.getElementById('srRes');
   let hits = [];
@@ -66,9 +66,9 @@ function openSearch() {
         if (fold(`${c.subject} ${c.className}`).includes(t)) hits.push({ kind: 'course', c });
         c.students.forEach(s => { if (fold(`${s.firstName} ${s.lastName}`).includes(t) || fold(`${s.lastName} ${s.firstName}`).includes(t)) hits.push({ kind: 'student', c, s }); });
       });
-      /* Planung: Einheiten und Stunden (Thema und Text) */
-      (data.units || []).forEach(u => { const c = getCourse(u.courseId); if (c && fold(`${u.title} ${richText(u.body)}`).includes(t)) hits.push({ kind: 'unit', c, u }); });
-      (data.lessonPlans || []).forEach(p => { const c = getCourse(p.courseId); if (c && fold(`${p.topic} ${richText(p.body)}`).includes(t)) hits.push({ kind: 'plan', c, p }); });
+      /* Planung: Einheiten und Stunden (Thema und Text) — nicht, wenn ausgeblendet */
+      if (!planningHidden()) (data.units || []).forEach(u => { const c = getCourse(u.courseId); if (c && fold(`${u.title} ${richText(u.body)}`).includes(t)) hits.push({ kind: 'unit', c, u }); });
+      if (!planningHidden()) (data.lessonPlans || []).forEach(p => { const c = getCourse(p.courseId); if (c && fold(`${p.topic} ${richText(p.body)}`).includes(t)) hits.push({ kind: 'plan', c, p }); });
     }
     const cn = c => `${esc(c.subject)} ${esc(c.className)}`;
     res.innerHTML = hits.slice(0, 30).map((h, i) => `<button class="sr-hit" data-i="${i}">${

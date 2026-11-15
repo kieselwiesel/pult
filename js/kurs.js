@@ -99,15 +99,16 @@ function renderKurs() {
   const toNoten = () => go({ name: 'course', courseId: c.id, hy: defaultHalfYear(c), view: route.view || 'simpel' });
 
   /* Unterricht: nächste Stunden und die letzte geplante */
+  const noPlan = planningHidden();
   const next = upcomingSlots(c.id, 3);
   const today = todayISO();
-  const past = coursePlans(c.id).filter(p => p.date && p.date < today).sort(planSort).reverse();
+  const past = noPlan ? [] : coursePlans(c.id).filter(p => p.date && p.date < today).sort(planSort).reverse();
   const last = past[0];
   const slotLine = (s, first) => {
-    const p = plansAtSlot(s)[0];
+    const p = noPlan ? null : plansAtSlot(s)[0];
     return `<div class="kd-slot ${first ? 'first' : ''}">
       <span class="kd-slot-when">${esc(slotLabel(s))}</span>
-      ${p ? `<button class="kd-link" data-open-plan="${p.id}">${esc(planTitle(p))}</button>`
+      ${noPlan ? '' : p ? `<button class="kd-link" data-open-plan="${p.id}">${esc(planTitle(p))}</button>`
           : `<button class="btn small" data-plan-slot="${slotKey(s)}">Planen</button>`}
     </div>`;
   };
@@ -148,8 +149,8 @@ function renderKurs() {
   }).filter(x => x.open > 0);
   const ha = act.reduce((a, s) => { const h = haCounts(c, s.id); a.g += h.gemacht; a.n += h.nicht; return a; }, { g: 0, n: 0 });
   const haQuote = ha.g + ha.n ? Math.round(ha.g / (ha.g + ha.n) * 100) : null;
-  const units = courseUnits(c.id);
-  const curUnit = next.length ? (plansAtSlot(next[0])[0] || {}).unitId : null;
+  const units = noPlan ? [] : courseUnits(c.id);
+  const curUnit = !noPlan && next.length ? (plansAtSlot(next[0])[0] || {}).unitId : null;
 
   const card = (title, body, link) => `<div class="calc-block kd-card"><div class="kd-card-h"><h3>${title}</h3>${link || ''}</div>${body}</div>`;
   const linkBtn = (id, label) => `<button class="kd-more" id="${id}">${label} ›</button>`;
@@ -160,7 +161,7 @@ function renderKurs() {
         <div class="sub">${act.length} Schüler:innen · ${scaleName(scale)}${curUnit && getUnit(curUnit) ? ' · Einheit: ' + esc(getUnit(curUnit).title) : ''}</div></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn small primary" id="kdNoten">Noten</button>
-        <button class="btn small" id="kdPlanung">Planung</button>
+        ${noPlan ? '' : '<button class="btn small" id="kdPlanung">Planung</button>'}
         <button class="btn small" id="kdSeat">${SEAT_ICON} Sitzplan</button>
         <button class="btn small" id="kdStudents">Schüler:innen</button>
         <button class="btn small" id="kdEdit">Kurs bearbeiten</button>
@@ -172,7 +173,7 @@ function renderKurs() {
       <button class="btn" id="kdTimer">${KD_TIMER_SVG}<span>Timer</span></button>
     </div>
     <div class="kd-grid">
-      ${card('Unterricht', unterricht + (units.length ? `<div class="cs-sub" style="margin-top:8px">${units.length} ${units.length === 1 ? 'Einheit' : 'Einheiten'} geplant</div>` : ''), linkBtn('kdToPlan', 'Planung'))}
+      ${card('Unterricht', unterricht + (units.length ? `<div class="cs-sub" style="margin-top:8px">${units.length} ${units.length === 1 ? 'Einheit' : 'Einheiten'} geplant</div>` : ''), noPlan ? '' : linkBtn('kdToPlan', 'Planung'))}
       ${card('Noten', noten, linkBtn('kdToNoten', 'Notentabelle'))}
       ${card('Todos', `${todoHtml || '<div class="cs-sub">Keine offenen Todos.</div>'}
         <div class="kd-add"><input id="kdTodoText" type="text" placeholder="Neues Todo … (Enter)"><button class="btn small" id="kdTodoAdd">+</button></div>`,
@@ -190,8 +191,10 @@ function renderKurs() {
   /* Ereignisse */
   document.getElementById('kdNoten').onclick = toNoten;
   document.getElementById('kdToNoten').onclick = toNoten;
-  document.getElementById('kdPlanung').onclick = () => go({ name: 'planung', courseId: c.id });
-  document.getElementById('kdToPlan').onclick = () => go({ name: 'planung', courseId: c.id });
+  if (!noPlan) {
+    document.getElementById('kdPlanung').onclick = () => go({ name: 'planung', courseId: c.id });
+    document.getElementById('kdToPlan').onclick = () => go({ name: 'planung', courseId: c.id });
+  }
   document.getElementById('kdSeat').onclick = () => { seatPending = null; go({ name: 'seating', courseId: c.id, seatMode: initialSeatMode(c) }); };
   document.getElementById('kdStudents').onclick = () => openStudents(c, null);
   document.getElementById('kdEdit').onclick = () => openCourseForm(c);

@@ -14,7 +14,7 @@
 const SET_PAGES = [
   { key: 'schuljahr',   title: 'Schuljahr',        sub: 'Ferien, Zeugniskonferenz, Halbjahr' },
   { key: 'stundenplan', title: 'Stundenplan',      sub: 'Rhythmus und Stundenzeiten' },
-  { key: 'darstellung', title: 'Darstellung',      sub: 'Hell/Dunkel, Notentabelle' },
+  { key: 'darstellung', title: 'Darstellung',      sub: 'Hell/Dunkel, Notentabelle, Planung' },
   { key: 'noten',       title: 'Noten',            sub: 'Kategorien, Vorgaben für neue Kurse' },
   { key: 'raster',      title: 'Bewertungsraster', sub: 'Vorlagen für Einschätzungen' },
   { key: 'sicherheit',  title: 'Sicherheit',       sub: 'App-Sperre' },
@@ -260,6 +260,10 @@ function setDarstellung(body) {
           `<button type="button" class="cat-color tm-swatch ${(m.terminColor || '') === v ? 'active' : ''}" data-c="${v}" style="background:${v || 'var(--amber)'}" role="radio" aria-checked="${(m.terminColor || '') === v}" aria-label="${name}" title="${name}"></button>`).join('')}</div>
         <div class="hint">Für das Kalenderzeichen am Tag und die Termine im Raster.</div>
       </div>
+      <div class="field"><label>Planung</label>
+        ${pdSeg('mPlan', [['show', 'Anzeigen'], ['hide', 'Ausblenden']], m.hidePlanning ? 'hide' : 'show')}
+        <div class="hint">Ausgeblendet verschwindet die Planung aus dem Menü, dem Kurs-Dashboard, dem Stundenplan und der Suche. Bereits Geplantes bleibt gespeichert und ist beim Einblenden wieder da.</div>
+      </div>
       <div class="field"><label>Hinweis „keine aktuelle mündliche Note"</label>
         <select id="mBlind">${[14, 21, 28, 42].map(d => `<option value="${d}" ${blindDays() === d ? 'selected' : ''}>nach ${d} Tagen</option>`).join('')}</select>
         <div class="hint">Markiert Schüler:innen mit einem Punkt, deren letzte mündliche Note länger zurückliegt.</div>
@@ -267,6 +271,10 @@ function setDarstellung(body) {
     </section>`;
   pdBindSeg('mTheme', v => { m.theme = v; applyTheme(); setSaved(); });
   pdBindSeg('mLayout', v => { m.tableLayout = v || 'invers'; setSaved(); });
+  pdBindSeg('mPlan', v => {
+    if (v === 'hide') m.hidePlanning = true; else delete m.hidePlanning;
+    setSaved(); renderTopNav();
+  });
   document.querySelectorAll('#mTmColor button').forEach(b => b.onclick = () => {
     m.terminColor = b.dataset.c; applyTheme(); setSaved();
     document.querySelectorAll('#mTmColor button').forEach(x => {

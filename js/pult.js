@@ -1305,7 +1305,12 @@ function exportICS() {
    ============================================================ */
 const app = () => document.getElementById('app');
 
+/* Einstellungen → Darstellung: Planung ausblenden. Einheiten und Stunden
+   bleiben gespeichert (auch im Backup), sind nur nirgends mehr zu sehen. */
+const planningHidden = () => !!(data && data.meta && data.meta.hidePlanning);
+
 function render() {
+  if (planningHidden() && (route.name === 'planung' || route.name === 'plan')) route = { name: 'home' };
   saveRoute();
   renderTopNav();
   renderTopbarRight();
@@ -1357,7 +1362,7 @@ function renderTopNav() {
   const el = document.getElementById('topnav');
   const active = navActive();
   const openCount = (data.todos || []).filter(t => !t.done).length;
-  el.innerHTML = TOP_PAGES.filter(p => p.nav !== false).map(p => {
+  el.innerHTML = TOP_PAGES.filter(p => p.nav !== false && !(p.name === 'planung' && planningHidden())).map(p => {
     const badge = p.name === 'todos' && openCount ? `<span class="nav-badge">${openCount}</span>` : '';
     return `<button class="tn ${p.name === active ? 'active' : ''}" data-nav="${p.name}">${p.label}${badge}</button>`;
   }).join('');
@@ -1545,13 +1550,13 @@ function renderHome() {
         /* nur Stunden, die es nicht in beiden Wochen gibt, bekommen die Marke */
         const mark = ab && (l.week || 0) ? `<span class="tt-ab">${AB_LABEL[l.week]}</span>` : '';
         /* Planung dieser Stunde (bei Doppelstunden an der ersten) */
-        const pl = c && !planEdit ? planAt(c.id, isoForWeekday(monday, day), pi) : null;
+        const pl = c && !planEdit && !planningHidden() ? planAt(c.id, isoForWeekday(monday, day), pi) : null;
         const doc = pl ? `<span class="tt-plan ${pl.done ? 'done' : ''}" data-plan="${pl.id}" role="button" tabindex="0" title="Planung: ${esc(planTitle(pl))}" aria-label="Planung öffnen: ${esc(planTitle(pl))}">${PLAN_DOC_SVG}</span>` : '';
         /* ohne Planung: unsichtbare Fläche unten rechts — erster Tipp zeigt
            das Symbol mit +, der zweite legt eine Stunde für diesen Termin an.
            Bei einer Doppelstunde zählt die erste; ist sie geplant, gibt es keine. */
         let add = '';
-        if (c && !planEdit && !pl && !off) {
+        if (c && !planEdit && !pl && !off && !planningHidden()) {
           const iso = isoForWeekday(monday, day);
           const slot = courseSlots(c.id, iso, 12, 1).find(s => s.periods.includes(pi));
           if (!slot || !plansAtSlot(slot).length)
