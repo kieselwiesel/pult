@@ -6,8 +6,12 @@
    die Stufe bei diesem Kriterium aussieht.
 
    Einschätzung: eine Notenspalte mit `col.raster`. Beim Anlegen wird die
-   Vorlage hineinkopiert (`def`) — spätere Änderungen an der Vorlage
-   verändern also keine fertigen Einschätzungen. Pro Schüler:in:
+   Vorlage hineinkopiert (`def`) — oder ohne Vorlage ein leeres Raster
+   angelegt. Spätere Änderungen an der Vorlage verändern also keine fertigen
+   Einschätzungen, und umgekehrt lässt sich `def` im Reiter „Raster anpassen"
+   frei bearbeiten (gleicher Editor wie für Vorlagen), ohne die Vorlage zu
+   berühren. `sourceId` verknüpft Einschätzungen derselben Vorlage (für die
+   Entwicklung); ohne Vorlage bekommt sie eine eigene Kennung. Pro Schüler:in:
      ratings[sId] = { v: { critId: punkte }, self: { critId: levelId }, comment, note }
    `comment` ist die Rückmeldung (wird gedruckt), `note` eine private Notiz
    der Lehrkraft (erscheint in keinem Ausdruck).
@@ -100,6 +104,16 @@ function rasterExamples() {
   ];
 }
 
+/* Leeres Raster zum Selbst-Aufbauen: Standardstufen, drei Platzhalter-Kriterien */
+function rasterBlank(name) {
+  const levels = RASTER_STD_LEVELS().map(l => ({ ...l, id: uid() }));
+  return {
+    name: name || 'Neues Raster', subject: '', intro: RASTER_INTRO, levels,
+    criteria: ['Kriterium 1', 'Kriterium 2', 'Kriterium 3'].map((label, i) =>
+      ({ id: uid(), label, weight: i === 0 ? 34 : 33, texts: {} })),
+  };
+}
+
 /* Beim ersten Start mit Rastern die Beispiele einmalig anlegen. Gelöschte
    Beispiele kommen nicht ungefragt zurück (dafür gibt es einen Knopf). */
 function migrateRaster() {
@@ -143,18 +157,35 @@ function rasterEnsureRating(col, sId) {
 const rasterHasRating = (col, sId) => Object.keys(rasterRating(col, sId).v || {}).length > 0;
 
 /* Gewichteter Schnitt der angekreuzten Kriterien. Nicht angekreuzte zählen
-   nicht; ihr Gewicht verteilt sich auf die übrigen. */
+   nicht; ihr Gewicht verteilt sich auf die übrigen.
+   Ergeben die angekreuzten Gewichte mehr als 100 %, zählen nur die am besten
+   bewerteten Kriterien bis zusammen 100 % — das Kriterium an der Grenze mit
+   dem Rest-Anteil, schwächere gar nicht (capped = true, used = gewertete %). */
 function rasterSuggest(def, rating) {
   const v = (rating && rating.v) || {};
   const rated = def.criteria.filter(cr => v[cr.id] != null);
   const total = def.criteria.length;
-  if (!rated.length) return { raw: null, points: null, n: 0, total };
+  if (!rated.length) return { raw: null, points: null, n: 0, total, capped: false, used: {} };
   const ws = rated.reduce((a, cr) => a + rasterW(cr), 0);
-  const raw = ws > 0
-    ? rated.reduce((a, cr) => a + rasterW(cr) * v[cr.id], 0) / ws
-    : rated.reduce((a, cr) => a + v[cr.id], 0) / rated.length;
-  return { raw, points: clamp(Math.round(raw), 0, 15), n: rated.length, total };
+  const used = {};
+  let raw, capped = false;
+  if (ws > 100 + 1e-9) {
+    capped = true;
+    let left = 100, acc = 0;
+    rated.slice().sort((a, b) => v[b.id] - v[a.id] || rasterW(b) - rasterW(a)).forEach(cr => {
+      const w = Math.min(rasterW(cr), left);
+      left -= w; acc += w * v[cr.id]; used[cr.id] = w;
+    });
+    raw = acc / 100;
+  } else if (ws > 0) {
+    raw = rated.reduce((a, cr) => a + rasterW(cr) * v[cr.id], 0) / ws;
+    rated.forEach(cr => used[cr.id] = rasterW(cr));
+  } else {
+    raw = rated.reduce((a, cr) => a + v[cr.id], 0) / rated.length;
+  }
+  return { raw, points: clamp(Math.round(raw), 0, 15), n: rated.length, total, capped, used };
 }
+const RASTER_CAP_HINT = 'Es zählen jeweils nur die am besten bewerteten Kriterien bis 100 %.';
 
 /* Punktebereich einer Stufe in der Skala des Kurses */
 function rasterRangeLabel(l, scale) {
@@ -208,7 +239,8 @@ function rasterPrevRound(c, col, sId) {
 }
 
 /* Notenspalte an den Vorschlag angleichen — außer bei abweichend festgelegter Note */
-function rasterApplyGrades(c, col, sIds) {
+/* mergeKey: fasst viele kleine Änderungen (z. B. Gewichte tippen) zu einem Protokolleintrag zusammen */
+function rasterApplyGrades(c, col, sIds, mergeKey) {
   const r = col.raster;
   if (!r.manual) r.manual = {};
   const ids = sIds.filter(id => !r.manual[id]);
@@ -225,7 +257,7 @@ function rasterApplyGrades(c, col, sIds) {
     label = `${s ? studentName(s) : 'Schüler:in'} — ${col.label} (Raster): ${gradeStr(snap[0].before, c)} → ${gradeStr((data.grades[ids[0]] || {})[col.id], c)}`;
   }
   /* gleicher Schlüssel wie setGradeLogged: Tippen im Raster und am Notenpad fließen zusammen */
-  commitChange(label, snap, { courseId: c.id, mergeKey: ids.length === 1 ? `grades:${ids[0]}:${col.id}` : null });
+  commitChange(label, snap, { courseId: c.id, mergeKey: mergeKey || (ids.length === 1 ? `grades:${ids[0]}:${col.id}` : null) });
 }
 
 /* kleines Bestätigungsfenster */
@@ -245,19 +277,15 @@ const rasterSlug = s => String(s || '').toLowerCase()
 function createRasterRound(c) {
   const tpls = (data.rubrics || []).slice().sort((a, b) =>
     (b.subject === c.subject) - (a.subject === c.subject) || a.name.localeCompare(b.name, 'de'));
-  if (!tpls.length) {
-    modal('Bewertungsraster', `<div class="notice">Noch keine Raster-Vorlage vorhanden.</div>`, [
-      { label: 'Abbrechen', onClick: closeModal },
-      { label: 'Vorlagen öffnen', cls: 'primary', onClick: () => go(RASTER_LIST) },
-    ]);
-    return;
-  }
   let count = 'muendlich';
   const countPicker = cur => catPickerHtml(c, 'rcCount', cur, { order: ['muendlich', 'schriftlich'], extra: [['none', 'Gar nicht']] });
   modal('Einschätzung mit Raster', `
-    <div class="field"><label>Vorlage</label>
-      <select id="rcTpl">${tpls.map(t => `<option value="${t.id}">${esc(t.name)}${t.subject ? ' · ' + esc(t.subject) : ''}</option>`).join('')}</select>
-      <div class="hint">Die Vorlage wird kopiert — spätere Änderungen an ihr verändern diese Einschätzung nicht.</div>
+    <div class="field"><label>Raster</label>
+      <select id="rcTpl">
+        ${tpls.length ? `<optgroup label="Vorlage laden">${tpls.map(t => `<option value="${t.id}">${esc(t.name)}${t.subject ? ' · ' + esc(t.subject) : ''}</option>`).join('')}</optgroup>` : ''}
+        <option value="__blank" ${tpls.length ? '' : 'selected'}>Ohne Vorlage — eigenes Raster aufbauen</option>
+      </select>
+      <div class="hint" id="rcTplHint"></div>
     </div>
     <div class="row2">
       <div class="field"><label>Bezeichnung</label><input id="rcLabel" type="text" value="Mitarbeit"></div>
@@ -271,20 +299,33 @@ function createRasterRound(c) {
     { label: 'Vorlagen verwalten', onClick: () => go(RASTER_LIST) },
     { label: 'Abbrechen', onClick: closeModal },
     { label: 'Anlegen', cls: 'primary', onClick: () => {
-      const tpl = tpls.find(t => t.id === val('rcTpl'));
-      if (!tpl) return;
-      const def = rasterClone(tpl); delete def.id;
+      const blank = val('rcTpl') === '__blank';
+      const tpl = blank ? null : tpls.find(t => t.id === val('rcTpl'));
+      if (!blank && !tpl) return;
+      const label = val('rcLabel').trim() || 'Mitarbeit';
+      let def;
+      if (tpl) { def = rasterClone(tpl); delete def.id; }
+      else def = rasterBlank(label);
       const col = {
         id: uid(), type: count === 'none' ? 'muendlich' : count,
-        label: val('rcLabel').trim() || 'Mitarbeit', date: val('rcDate'),
-        raster: { sourceId: tpl.id, def, ratings: {}, manual: {} },
+        label, date: val('rcDate'),
+        /* ohne Vorlage: eigene Kennung, damit spätere Runden (z. B. nach
+           „Als Vorlage speichern") sich als Fortsetzung erkennen */
+        raster: { sourceId: tpl ? tpl.id : uid(), def, ratings: {}, manual: {} },
       };
       if (count === 'none') col.noCount = true;
       c.halfYears[route.hy].columns.push(col);
       save(); closeModal();
-      go({ name: 'raster', courseId: c.id, columnId: col.id, rTab: 'bogen', rStudent: null });
+      go({ name: 'raster', courseId: c.id, columnId: col.id, rTab: blank ? 'anpassen' : 'bogen', rStudent: null });
     }},
   ]);
+  const tplHint = () => {
+    document.getElementById('rcTplHint').textContent = val('rcTpl') === '__blank'
+      ? 'Startet mit den üblichen Notenstufen und drei leeren Kriterien — alles lässt sich anschließend anpassen.'
+      : 'Die Vorlage wird kopiert. Unter „Raster anpassen" kannst du danach alles nur für diese Einschätzung ändern — die Vorlage bleibt, wie sie ist.';
+  };
+  document.getElementById('rcTpl').onchange = tplHint;
+  tplHint();
   bindCatPicker('rcCount', v => count = v);
 }
 
@@ -300,7 +341,7 @@ function renderRaster() {
   if (!found) return go({ name: 'course', courseId: c.id });
   const { col, hyKey } = found;
   route.hy = hyKey;
-  const tab = route.rTab === 'bogen' ? 'bogen' : 'liste';
+  const tab = ['bogen', 'anpassen'].includes(route.rTab) ? route.rTab : 'liste';
   const active = c.students.filter(studentActive);
   const done = active.filter(s => rasterHasRating(col, s.id)).length;
   const countTxt = col.noCount ? 'zählt nicht zur Note' : catCountsText(col.type);
@@ -319,6 +360,7 @@ function renderRaster() {
     <div class="tabs">
       <button class="tab ${tab === 'liste' ? 'active' : ''}" data-t="liste">Übersicht <span class="tab-count">${done}/${active.length}</span></button>
       <button class="tab ${tab === 'bogen' ? 'active' : ''}" data-t="bogen">Einschätzen</button>
+      <button class="tab ${tab === 'anpassen' ? 'active' : ''}" data-t="anpassen">Raster anpassen</button>
     </div>
     <div id="rsBody"></div>`;
 
@@ -327,6 +369,7 @@ function renderRaster() {
   document.getElementById('rsSettings').onclick = () => openRasterSettings(c, col);
 
   if (tab === 'bogen') renderRasterBogen(c, col);
+  else if (tab === 'anpassen') renderRasterAnpassen(c, col);
   else renderRasterListe(c, col);
 }
 
@@ -361,7 +404,7 @@ function renderRasterListe(c, col) {
   }).join('');
 
   body.innerHTML = `
-    <div class="notice">Zeile antippen, um einzuschätzen. Der Vorschlag ist der nach Gewicht gemittelte Wert der angekreuzten Kriterien${col.noCount ? '.' : ' und landet als Note in der Notentabelle — außer du legst sie abweichend fest (*).'}</div>
+    <div class="notice">Zeile antippen, um einzuschätzen. Der Vorschlag ist der nach Gewicht gemittelte Wert der angekreuzten Kriterien${col.noCount ? '.' : ' und landet als Note in der Notentabelle — außer du legst sie abweichend fest (*).'}${rasterWeightSum(def) > 100 + 1e-9 ? ` <b>Gewichte zusammen ${fmtNum(rasterWeightSum(def))} %:</b> ${RASTER_CAP_HINT}` : ''}</div>
     <div class="table-wrap"><table class="grades rs-list">
       <thead><tr><th class="col-name">Schüler:in</th>${head}<th class="grp-muend">Ø Vorschlag</th><th class="grp-final">Note</th></tr></thead>
       <tbody>${rows}</tbody>
@@ -391,7 +434,14 @@ function renderRasterBogen(c, col) {
   const manual = !!(r.manual || {})[s.id];
   const next = list[idx + 1];
 
-  const headRow = def.criteria.map(cr => `<th>${esc(cr.label)}<span class="rs-w">${fmtNum(cr.weight)} %${v[cr.id] != null ? ` · <b>${fmtGrade(v[cr.id], scale, false)}</b>` : ''}</span></th>`).join('');
+  /* über 100 %: zeigen, was vom Gewicht tatsächlich zählt */
+  const usedTxt = cr => {
+    if (!sug.capped || v[cr.id] == null) return '';
+    const u = sug.used[cr.id] || 0;
+    if (u >= rasterW(cr) - 1e-9) return '';
+    return `<span class="rs-w rs-w-cut">${u > 0 ? `zählt ${fmtNum(u)} %` : 'zählt nicht'}</span>`;
+  };
+  const headRow = def.criteria.map(cr => `<th>${esc(cr.label)}<span class="rs-w">${fmtNum(cr.weight)} %${v[cr.id] != null ? ` · <b>${fmtGrade(v[cr.id], scale, false)}</b>` : ''}</span>${usedTxt(cr)}</th>`).join('');
   const rows = def.levels.map((l, li) => {
     const cells = def.criteria.map(cr => {
       const sel = rasterLevelIdx(def, v[cr.id]) === li;
@@ -445,6 +495,7 @@ function renderRasterBogen(c, col) {
         <span class="dt-lbl">Vorschlag aus dem Raster</span>
         <div class="rs-sum-val">${rasterChip(sug.points, scale)}
           <span class="cs-sub">${sug.n ? `Ø ${fmtGrade(sug.raw, scale, true)}${scale === 'noten' ? '' : ' P.'} · ${sug.n} von ${sug.total} Kriterien` : 'noch nichts angekreuzt'}</span></div>
+        ${sug.capped ? `<div class="hint" style="margin-top:4px">Angekreuzt sind mehr als 100 % — es zählen nur die am besten bewerteten Kriterien bis 100 %.</div>` : ''}
       </div>
       <div class="rs-sum-box">
         <span class="dt-lbl">Note in der Notentabelle</span>
@@ -526,17 +577,135 @@ function renderRasterBogen(c, col) {
   bindInfoBadges(body, c);
 }
 
-/* --- Einstellungen einer Einschätzung --- */
-function openRasterSettings(c, col) {
+/* --- Reiter: Raster anpassen (nur diese Einschätzung) --- */
+function renderRasterAnpassen(c, col) {
+  const body = document.getElementById('rsBody');
   const r = col.raster, def = r.def;
   const tpl = (data.rubrics || []).find(t => t.id === r.sourceId);
+  const nRated = c.students.filter(s => rasterHasRating(col, s.id)).length;
+  const recalc = () => { if (!col.noCount) rasterApplyGrades(c, col, c.students.map(s => s.id), `rasterdef:${col.id}`); };
+  /* wie viele Bögen bei einem Kriterium bzw. einer Stufe etwas eingetragen haben */
+  const usedCrit = cr => Object.values(r.ratings || {}).filter(rt => (rt.v || {})[cr.id] != null || (rt.self || {})[cr.id] != null).length;
+  const usedLvl = l => Object.values(r.ratings || {}).filter(rt => Object.values(rt.self || {}).includes(l.id)).length;
+  const boegen = n => `${n} ${n === 1 ? 'Bogen' : 'Bögen'}`;
+
+  body.innerHTML = `
+    <div class="set-toolbar">
+      <div><div class="hint">Änderungen gelten <b>nur für diese Einschätzung</b> und werden sofort gespeichert.
+        ${tpl ? `Grundlage ist die Vorlage „${esc(tpl.name)}" — sie selbst bleibt unverändert.` : 'Angelegt ohne (bestehende) Vorlage.'}</div></div>
+      <div class="set-buttons">
+        <button class="btn small" id="raLoad">Vorlage laden …</button>
+        <button class="btn small" id="raSaveTpl">Als Vorlage speichern …</button>
+      </div>
+    </div>
+    ${nRated ? `<div class="notice">Bereits ${boegen(nRated)} ausgefüllt. Gelöschte Kriterien nehmen ihre Kreuze mit; liegt ein Kreuz nach einer Änderung der Punktebereiche außerhalb aller Stufen, zählt die nächstgelegene. Der Notenvorschlag wird laufend neu berechnet.</div>` : ''}
+    ${rasterEditorHtml(def)}`;
+
+  bindRasterEditor(body, def, {
+    changed: calc => { if (calc) recalc(); save(); },
+    rerender: () => { const y = window.scrollY; renderRaster(); window.scrollTo(0, y); },
+    delCritNote: cr => { const n = usedCrit(cr); return n ? `In ${boegen(n)} ist hier schon etwas angekreuzt — das wird mit entfernt.` : ''; },
+    onDelCrit: cr => Object.values(r.ratings || {}).forEach(rt => {
+      if (rt.v) delete rt.v[cr.id];
+      if (rt.self) delete rt.self[cr.id];
+    }),
+    delLvlNote: l => { const n = usedLvl(l); return n ? `Selbsteinschätzungen auf dieser Stufe (${boegen(n)}) werden entfernt; Kreuze der Lehrkraft rutschen in die nächstgelegene Stufe.` : ''; },
+    onDelLvl: l => Object.values(r.ratings || {}).forEach(rt => {
+      Object.keys(rt.self || {}).forEach(k => { if (rt.self[k] === l.id) delete rt.self[k]; });
+    }),
+  });
+  document.getElementById('raLoad').onclick = () => openRasterLoadTpl(c, col);
+  document.getElementById('raSaveTpl').onclick = () => openRasterSaveAsTpl(col);
+}
+
+/* Raster der Einschätzung durch eine Vorlage (oder ein leeres Raster) ersetzen */
+function openRasterLoadTpl(c, col) {
+  const r = col.raster;
+  const tpls = (data.rubrics || []).slice().sort((a, b) =>
+    (b.id === r.sourceId) - (a.id === r.sourceId) || (b.subject === c.subject) - (a.subject === c.subject) || a.name.localeCompare(b.name, 'de'));
+  const nRated = c.students.filter(s => rasterHasRating(col, s.id)).length;
+  modal('Vorlage laden', `
+    <div class="field"><label>Raster</label>
+      <select id="rlTpl">
+        ${tpls.map(t => `<option value="${t.id}">${esc(t.name)}${t.subject ? ' · ' + esc(t.subject) : ''}${t.id === r.sourceId ? ' (bisherige Grundlage)' : ''}</option>`).join('')}
+        <option value="__blank">Leeres Raster — neu aufbauen</option>
+      </select></div>
+    <p>Kriterien, Stufen und Texte dieser Einschätzung werden ersetzt. ${nRated
+      ? `Kreuze aus ${nRated} ${nRated === 1 ? 'Bogen' : 'Bögen'} bleiben nur bei Kriterien erhalten, die es in der neuen Fassung noch gibt (das ist bei derselben Vorlage der Fall).`
+      : ''}</p>
+  `, [
+    { label: 'Abbrechen', onClick: closeModal },
+    { label: 'Laden', cls: nRated ? 'danger' : 'primary', onClick: () => {
+      const id = val('rlTpl');
+      const tpl = tpls.find(t => t.id === id);
+      let def;
+      if (tpl) { def = rasterClone(tpl); delete def.id; r.sourceId = tpl.id; }
+      else { def = rasterBlank(r.def.name || col.label); r.sourceId = uid(); }
+      r.def = def;
+      /* Kreuze zu Kriterien, die es nicht mehr gibt, aufräumen */
+      const ids = new Set(def.criteria.map(cr => cr.id)), lvls = new Set(def.levels.map(l => l.id));
+      Object.values(r.ratings || {}).forEach(rt => {
+        Object.keys(rt.v || {}).forEach(k => { if (!ids.has(k)) delete rt.v[k]; });
+        Object.keys(rt.self || {}).forEach(k => { if (!ids.has(k) || !lvls.has(rt.self[k])) delete rt.self[k]; });
+      });
+      if (!col.noCount) rasterApplyGrades(c, col, c.students.map(s => s.id));
+      save(); closeModal(); renderRaster();
+      toast(tpl ? `„${tpl.name}" geladen.` : 'Leeres Raster geladen.');
+    }},
+  ]);
+}
+
+/* Raster der Einschätzung als (neue) Vorlage sichern */
+function openRasterSaveAsTpl(col) {
+  const r = col.raster;
+  const tpl = (data.rubrics || []).find(t => t.id === r.sourceId);
+  let mode = 'new';
+  modal('Als Vorlage speichern', `
+    ${tpl ? `<div class="field"><div class="seg" id="rtMode" style="width:100%">
+        <button type="button" data-v="new" style="flex:1" class="active">Neue Vorlage</button>
+        <button type="button" data-v="over" style="flex:1">„${esc(tpl.name)}" überschreiben</button>
+      </div></div>` : ''}
+    <div class="field" id="rtNameWrap"><label>Name der Vorlage</label>
+      <input id="rtName" type="text" value="${esc(r.def.name || col.label)}"></div>
+    <div class="hint" id="rtHint"></div>
+  `, [
+    { label: 'Abbrechen', onClick: closeModal },
+    { label: 'Speichern', cls: 'primary', onClick: () => {
+      const copy = rasterClone(r.def);
+      if (mode === 'over' && tpl) {
+        copy.id = tpl.id; copy.name = tpl.name;
+        data.rubrics[data.rubrics.indexOf(tpl)] = copy;
+      } else {
+        copy.name = val('rtName').trim() || copy.name || 'Raster';
+        /* ohne bestehende Vorlage übernimmt die neue die Kennung dieser Einschätzung —
+           spätere Einschätzungen damit zeigen dann die Entwicklung seit heute */
+        copy.id = tpl ? uid() : r.sourceId;
+        data.rubrics.push(copy);
+      }
+      save(); closeModal(); renderRaster();
+      toast(`Vorlage „${copy.name}" gespeichert.`);
+    }},
+  ]);
+  const sync = () => {
+    document.getElementById('rtNameWrap').style.display = mode === 'over' ? 'none' : '';
+    document.getElementById('rtHint').textContent = mode === 'over'
+      ? 'Die Vorlage erhält die Fassung dieser Einschätzung. Andere, bereits angelegte Einschätzungen bleiben unverändert.'
+      : 'Erscheint danach unter Einstellungen → Bewertungsraster und beim Anlegen neuer Einschätzungen.';
+  };
+  document.querySelectorAll('#rtMode button').forEach(b => b.onclick = () => {
+    mode = b.dataset.v;
+    document.querySelectorAll('#rtMode button').forEach(x => x.classList.toggle('active', x === b));
+    sync();
+  });
+  sync();
+}
+
+/* --- Einstellungen einer Einschätzung --- */
+function openRasterSettings(c, col) {
   let count = col.noCount ? 'none' : col.type;
   const fixedPct = colPct(col);
   const wMode = fixedPct != null ? 'pct' : 'factor';
   let wPick = wMode;
-  const critRows = def.criteria.map(cr => `
-    <div class="rs-w-row"><span>${esc(cr.label)}</span>
-      <input type="number" min="0" max="100" step="1" data-w="${cr.id}" value="${fmtNum(cr.weight).replace(',', '.')}"><span class="cs-sub">%</span></div>`).join('');
   modal('Einschätzung — Einstellungen', `
     <div class="row2">
       <div class="field"><label>Bezeichnung</label><input id="reLabel" type="text" value="${esc(col.label)}"></div>
@@ -559,12 +728,9 @@ function openRasterSettings(c, col) {
         <div class="hint" id="rePctHint"></div>
       </div>
     </div>
-    <div class="field"><label>Gewichtung der Kriterien</label>
-      ${critRows}
-      <div class="hint" id="reWSum"></div>
+    <div class="field"><label>Raster</label>
+      <button type="button" class="btn small" id="reEditDef">Kriterien, Gewichte, Stufen und Texte anpassen ›</button>
     </div>
-    ${tpl ? `<button class="btn small" id="reReload">Texte und Stufen aus der Vorlage neu übernehmen</button>
-      <div class="hint" style="margin-top:4px">Nötig, wenn du die Vorlage nachträglich korrigiert hast. Kreuze bleiben erhalten, solange es die Kriterien noch gibt.</div>` : ''}
   `, [
     { label: 'Löschen', cls: 'danger', onClick: () => confirmDeleteRaster(c, col) },
     { label: 'Abbrechen', onClick: closeModal },
@@ -582,23 +748,10 @@ function openRasterSettings(c, col) {
         const f = clamp(parseFloat(val('reFactor').replace(',', '.')) || 1, 0.1, 20);
         if (f !== 1) col.factor = f;
       }
-      document.querySelectorAll('[data-w]').forEach(inp => {
-        const cr = def.criteria.find(x => x.id === inp.dataset.w);
-        if (cr) cr.weight = clamp(parseFloat(inp.value.replace(',', '.')) || 0, 0, 100);
-      });
       if (!col.noCount) rasterApplyGrades(c, col, c.students.map(s => s.id));
       save(); closeModal(); renderRaster();
     }},
   ]);
-  const sumHint = () => {
-    let sum = 0;
-    document.querySelectorAll('[data-w]').forEach(inp => sum += parseFloat(inp.value.replace(',', '.')) || 0);
-    const el = document.getElementById('reWSum');
-    el.innerHTML = Math.round(sum) === 100 ? `Summe: 100 %`
-      : `<span style="color:var(--amber)">Summe: ${fmtNum(sum)} %</span> — wird anteilig umgerechnet.`;
-  };
-  document.querySelectorAll('[data-w]').forEach(inp => inp.oninput = sumHint);
-  sumHint();
   /* Hinweis zum festen Anteil — Bezug ist der Bereich, in den die Einschätzung zählt */
   const pctHint = () => {
     const el = document.getElementById('rePctHint'); if (!el) return;
@@ -618,14 +771,7 @@ function openRasterSettings(c, col) {
   });
   document.getElementById('rePct').oninput = pctHint;
   pctHint();
-  const rl = document.getElementById('reReload');
-  if (rl) rl.onclick = () => {
-    const fresh = rasterClone(tpl); delete fresh.id;
-    r.def = fresh;
-    if (!col.noCount) rasterApplyGrades(c, col, c.students.map(s => s.id));
-    save(); closeModal(); renderRaster();
-    toast('Vorlage neu übernommen.');
-  };
+  document.getElementById('reEditDef').onclick = () => { closeModal(); go({ rTab: 'anpassen' }); };
 }
 
 function confirmDeleteRaster(c, col) {
@@ -659,7 +805,7 @@ function renderRasterVorlagen(host) {
     const sum = rasterWeightSum(t);
     return `<div class="chip rs-tpl">
       <div class="chip-main"><b>${esc(t.name || 'Ohne Namen')}</b>
-        <span>${t.subject ? esc(t.subject) + ' · ' : ''}${t.criteria.length} Kriterien · ${t.levels.length} Stufen${Math.round(sum) === 100 ? '' : ` · <span style="color:var(--amber)">Gewichte ${fmtNum(sum)} %</span>`}</span></div>
+        <span>${t.subject ? esc(t.subject) + ' · ' : ''}${t.criteria.length} Kriterien · ${t.levels.length} Stufen${Math.abs(sum - 100) < 1e-9 ? '' : ` · <span style="color:var(--amber)" title="${sum > 100 ? esc(RASTER_CAP_HINT) : 'wird anteilig hochgerechnet'}">Gewichte ${fmtNum(sum)} %${sum > 100 ? ' — beste 100 % zählen' : ''}</span>`}</span></div>
       <div class="set-buttons">
         <button class="btn small" data-act="edit" data-id="${t.id}">Bearbeiten</button>
         <button class="btn small" data-act="blank" data-id="${t.id}">Leerer Bogen</button>
@@ -685,12 +831,7 @@ function renderRasterVorlagen(host) {
     <div class="chip-list">${rows}</div>`;
 
   document.getElementById('rvNew').onclick = () => {
-    const levels = RASTER_STD_LEVELS().map(l => ({ ...l, id: uid() }));
-    const t = {
-      id: uid(), name: 'Neues Raster', subject: '', intro: RASTER_INTRO, levels,
-      criteria: ['Kriterium 1', 'Kriterium 2', 'Kriterium 3'].map((label, i) =>
-        ({ id: uid(), label, weight: i === 0 ? 34 : 33, texts: {} })),
-    };
+    const t = Object.assign({ id: uid() }, rasterBlank());
     data.rubrics.push(t); save();
     go({ name: 'settings', setPage: 'raster', rasterId: t.id });
   };
@@ -741,13 +882,16 @@ function importRasterFile(file) {
   reader.readAsText(file);
 }
 
-/* --- Vorlage bearbeiten --- */
-function renderRasterEdit(host) {
-  host = host || document.getElementById('setBody');
-  const t = (data.rubrics || []).find(x => x.id === route.rasterId);
-  if (!t || !host) return go(RASTER_LIST);
+/* --- Raster-Editor ---
+   Dieselbe Oberfläche für Vorlagen (Einstellungen) und für das Raster einer
+   einzelnen Einschätzung (Reiter „Raster anpassen"). t ist die Vorlage bzw.
+   col.raster.def. cfg:
+     changed(calc)  nach jeder Änderung; calc = der Notenvorschlag kann sich ändern
+     rerender()     nach Änderungen am Aufbau (neu zeichnen)
+     onDelCrit(cr) / onDelLvl(l)   optional, räumt z. B. Kreuze auf
+     delCritNote(cr) / delLvlNote(l)  optional, zusätzlicher Satz in der Rückfrage */
+function rasterEditorHtml(t) {
   const sum = rasterWeightSum(t);
-
   const critRows = t.criteria.map((cr, i) => `
     <div class="rs-ed-row" data-i="${i}">
       <input type="text" class="ed-crit-label" value="${esc(cr.label)}" placeholder="Kriterium">
@@ -755,7 +899,7 @@ function renderRasterEdit(host) {
       <button class="btn small ed-crit-left" ${i === 0 ? 'disabled' : ''} title="nach links">←</button>
       <button class="btn small ed-crit-right" ${i === t.criteria.length - 1 ? 'disabled' : ''} title="nach rechts">→</button>
       <button class="btn small danger ed-crit-del" title="Kriterium löschen">×</button>
-    </div>`).join('');
+    </div>`).join('') || `<div class="hint" style="margin-bottom:8px">Noch keine Kriterien.</div>`;
   const lvlRows = t.levels.map((l, i) => `
     <div class="rs-ed-lvl" data-i="${i}">
       <div class="rs-ed-top">
@@ -772,21 +916,11 @@ function renderRasterEdit(host) {
   const gridRows = t.levels.map(l => `<tr><th class="rs-lvl"><b>${esc(l.label)}</b><span class="rs-range">${rasterRangeLabel(l, 'punkte')}</span></th>
     ${t.criteria.map(cr => `<td><textarea class="ed-text" data-c="${cr.id}" data-l="${l.id}" placeholder="Beschreibung …">${esc((cr.texts || {})[l.id] || '')}</textarea></td>`).join('')}</tr>`).join('');
 
-  host.innerHTML = `
-    <button class="set-back set-back-sub" id="edBack">‹ Alle Vorlagen</button>
-    <div class="set-toolbar">
-      <div><div class="rs-ed-name">${esc(t.name || 'Raster')}</div>
-        <div class="hint">Änderungen werden sofort gespeichert. Bereits angelegte Einschätzungen behalten ihre Fassung.</div></div>
-      <div class="set-buttons">
-        <button class="btn small" id="edBlank">Leerer Bogen</button>
-        <button class="btn small primary" id="edDone">Fertig</button>
-      </div>
-    </div>
-
+  return `
     <div class="rs-ed-cols">
       <div class="calc-block">
         <h3>Allgemein</h3>
-        <div class="field"><label>Name</label><input id="edName" type="text" value="${esc(t.name || '')}"></div>
+        <div class="field"><label>Name des Rasters</label><input id="edName" type="text" value="${esc(t.name || '')}"></div>
         <div class="field"><label>Fach (optional)</label><input id="edSubject" type="text" value="${esc(t.subject || '')}" placeholder="z. B. Mathematik"></div>
         <div class="field"><label>Hinweis auf dem leeren Bogen</label>
           <textarea id="edIntro" style="min-height:60px">${esc(t.intro || '')}</textarea>
@@ -795,8 +929,11 @@ function renderRasterEdit(host) {
       <div class="calc-block">
         <h3>Kriterien und Gewichtung</h3>
         <div id="edCrits">${critRows}</div>
-        <div class="hint" id="edWSum" style="margin-bottom:8px">${Math.round(sum) === 100 ? 'Summe: 100 %' : `<span style="color:var(--amber)">Summe: ${fmtNum(sum)} %</span> — wird beim Rechnen anteilig umgerechnet.`}</div>
-        <button class="btn small" id="edAddCrit">+ Kriterium</button>
+        <div class="hint" id="edWSum" style="margin-bottom:8px">${rasterWSumHtml(sum)}</div>
+        <div class="set-buttons">
+          <button class="btn small" id="edAddCrit">+ Kriterium</button>
+          <button class="btn small" id="edFit100" ${sum > 100 + 1e-9 ? '' : 'hidden'}>Auf 100 % verringern</button>
+        </div>
       </div>
     </div>
 
@@ -807,50 +944,72 @@ function renderRasterEdit(host) {
       <button class="btn small" id="edAddLvl">+ Stufe</button>
     </div>
 
-    <div class="calc-block">
+    ${t.criteria.length ? `<div class="calc-block">
       <h3>Beschreibungen</h3>
       <div class="rs-grid-wrap"><table class="rs-grid rs-ed-grid">
         <colgroup><col class="rs-col-lvl">${t.criteria.map(() => '<col>').join('')}</colgroup>
         <thead><tr><th class="rs-lvl-h">Stufe</th>${gridHead}</tr></thead>
         <tbody>${gridRows}</tbody>
       </table></div>
-    </div>`;
+    </div>` : ''}`;
+}
+/* Gewichte anteilig auf genau 100 % bringen — ganze Prozent, Rundungsreste
+   gehen an die Kriterien mit dem größten Nachkomma-Anteil */
+function rasterFitTo100(t) {
+  const sum = rasterWeightSum(t);
+  if (!(sum > 0)) return;
+  const exact = t.criteria.map(cr => rasterW(cr) * 100 / sum);
+  const out = exact.map(Math.floor);
+  let rest = 100 - out.reduce((a, b) => a + b, 0);
+  exact.map((x, i) => [x - out[i], i]).sort((a, b) => b[0] - a[0])
+    .forEach(([, i]) => { if (rest > 0) { out[i]++; rest--; } });
+  t.criteria.forEach((cr, i) => cr.weight = out[i]);
+}
+const rasterWSumHtml = s => Math.abs(s - 100) < 1e-9 ? 'Summe: 100 %'
+  : s > 100 ? `<span style="color:var(--amber)">Summe: ${fmtNum(s)} %</span> — ${RASTER_CAP_HINT}`
+  : `<span style="color:var(--amber)">Summe: ${fmtNum(s)} %</span> — wird beim Rechnen anteilig auf 100 % hochgerechnet.`;
 
-  const rerender = () => { save(); const y = window.scrollY; renderRasterEdit(); window.scrollTo(0, y); };
-  document.getElementById('edDone').onclick = () => go(RASTER_LIST);
-  document.getElementById('edBack').onclick = () => go(RASTER_LIST);
-  document.getElementById('edBlank').onclick = () => openRasterBlankPrint(t);
-  document.getElementById('edName').oninput = e => { t.name = e.target.value; save(); };
-  document.getElementById('edName').onchange = rerender;
-  document.getElementById('edSubject').oninput = e => { t.subject = e.target.value.trim(); save(); };
-  document.getElementById('edIntro').oninput = e => { t.intro = e.target.value; save(); };
+function bindRasterEditor(host, t, cfg) {
+  const changed = calc => cfg.changed(!!calc);
+  const rerender = () => { changed(true); cfg.rerender(); };
+  const on = (id, ev, fn) => { const el = host.querySelector('#' + id); if (el) el[ev] = fn; };
+  on('edName', 'oninput', e => { t.name = e.target.value; changed(false); });
+  on('edName', 'onchange', rerender);
+  on('edSubject', 'oninput', e => { t.subject = e.target.value.trim(); changed(false); });
+  on('edIntro', 'oninput', e => { t.intro = e.target.value; changed(false); });
 
   /* Kriterien */
-  const wSum = () => {
-    const s = rasterWeightSum(t);
-    document.getElementById('edWSum').innerHTML = Math.round(s) === 100 ? 'Summe: 100 %'
-      : `<span style="color:var(--amber)">Summe: ${fmtNum(s)} %</span> — wird beim Rechnen anteilig umgerechnet.`;
-  };
   host.querySelectorAll('.rs-ed-row').forEach(row => {
     const i = +row.dataset.i, cr = t.criteria[i];
-    row.querySelector('.ed-crit-label').oninput = e => { cr.label = e.target.value; save(); };
+    row.querySelector('.ed-crit-label').oninput = e => { cr.label = e.target.value; changed(false); };
     row.querySelector('.ed-crit-label').onchange = rerender;
-    row.querySelector('.ed-crit-w').oninput = e => { cr.weight = clamp(parseFloat(e.target.value.replace(',', '.')) || 0, 0, 100); save(); wSum(); };
+    row.querySelector('.ed-crit-w').oninput = e => {
+      cr.weight = clamp(parseFloat(e.target.value.replace(',', '.')) || 0, 0, 100);
+      changed(true);
+      const sum = rasterWeightSum(t);
+      host.querySelector('#edWSum').innerHTML = rasterWSumHtml(sum);
+      host.querySelector('#edFit100').hidden = !(sum > 100 + 1e-9);
+    };
     row.querySelector('.ed-crit-left').onclick = () => { t.criteria.splice(i - 1, 0, t.criteria.splice(i, 1)[0]); rerender(); };
     row.querySelector('.ed-crit-right').onclick = () => { t.criteria.splice(i + 1, 0, t.criteria.splice(i, 1)[0]); rerender(); };
     row.querySelector('.ed-crit-del').onclick = () => rasterConfirm('Kriterium löschen?',
-      `<p><b>${esc(cr.label)}</b> samt seinen Beschreibungen wird aus der Vorlage entfernt.</p>`, 'Löschen',
-      () => { t.criteria.splice(i, 1); closeModal(); rerender(); });
+      `<p><b>${esc(cr.label)}</b> samt seinen Beschreibungen wird entfernt.${cfg.delCritNote ? ' ' + cfg.delCritNote(cr) : ''}</p>`, 'Löschen',
+      () => {
+        t.criteria.splice(i, 1);
+        if (cfg.onDelCrit) cfg.onDelCrit(cr);
+        closeModal(); rerender();
+      });
   });
-  document.getElementById('edAddCrit').onclick = () => {
+  on('edFit100', 'onclick', () => { rasterFitTo100(t); rerender(); });
+  on('edAddCrit', 'onclick', () => {
     t.criteria.push({ id: uid(), label: 'Kriterium ' + (t.criteria.length + 1), weight: 0, texts: {} });
     rerender();
-  };
+  });
 
   /* Stufen */
   host.querySelectorAll('.rs-ed-lvl').forEach(row => {
     const i = +row.dataset.i, l = t.levels[i];
-    row.querySelector('.ed-lvl-label').oninput = e => { l.label = e.target.value; save(); };
+    row.querySelector('.ed-lvl-label').oninput = e => { l.label = e.target.value; changed(false); };
     row.querySelector('.ed-lvl-label').onchange = rerender;
     const minI = row.querySelector('.ed-lvl-min'), maxI = row.querySelector('.ed-lvl-max');
     const setRange = () => {
@@ -860,26 +1019,58 @@ function renderRasterEdit(host) {
       rerender();
     };
     minI.onchange = setRange; maxI.onchange = setRange;
-    row.querySelector('.ed-lvl-desc').oninput = e => { l.desc = e.target.value; save(); };
+    row.querySelector('.ed-lvl-desc').oninput = e => { l.desc = e.target.value; changed(false); };
     row.querySelector('.ed-lvl-up').onclick = () => { t.levels.splice(i - 1, 0, t.levels.splice(i, 1)[0]); rerender(); };
     row.querySelector('.ed-lvl-down').onclick = () => { t.levels.splice(i + 1, 0, t.levels.splice(i, 1)[0]); rerender(); };
     row.querySelector('.ed-lvl-del').onclick = () => {
       if (t.levels.length <= 1) return toast('Mindestens eine Stufe muss bleiben.');
-      rasterConfirm('Stufe löschen?', `<p><b>${esc(l.label)}</b> samt Beschreibungen wird entfernt.</p>`, 'Löschen',
-        () => { t.levels.splice(i, 1); t.criteria.forEach(cr => cr.texts && delete cr.texts[l.id]); closeModal(); rerender(); });
+      rasterConfirm('Stufe löschen?', `<p><b>${esc(l.label)}</b> samt Beschreibungen wird entfernt.${cfg.delLvlNote ? ' ' + cfg.delLvlNote(l) : ''}</p>`, 'Löschen',
+        () => {
+          t.levels.splice(i, 1);
+          t.criteria.forEach(cr => cr.texts && delete cr.texts[l.id]);
+          if (cfg.onDelLvl) cfg.onDelLvl(l);
+          closeModal(); rerender();
+        });
     };
   });
-  document.getElementById('edAddLvl').onclick = () => {
+  on('edAddLvl', 'onclick', () => {
     t.levels.push({ id: uid(), label: 'Neue Stufe', desc: '', min: 0, max: 0 });
     rerender();
-  };
+  });
 
   /* Beschreibungen */
   host.querySelectorAll('textarea.ed-text').forEach(ta => ta.oninput = () => {
     const cr = t.criteria.find(x => x.id === ta.dataset.c); if (!cr) return;
     if (!cr.texts) cr.texts = {};
     cr.texts[ta.dataset.l] = ta.value;
-    save();
+    changed(false);
+  });
+}
+
+/* --- Vorlage bearbeiten (Einstellungen) --- */
+function renderRasterEdit(host) {
+  host = host || document.getElementById('setBody');
+  const t = (data.rubrics || []).find(x => x.id === route.rasterId);
+  if (!t || !host) return go(RASTER_LIST);
+
+  host.innerHTML = `
+    <button class="set-back set-back-sub" id="edBack">‹ Alle Vorlagen</button>
+    <div class="set-toolbar">
+      <div><div class="rs-ed-name">${esc(t.name || 'Raster')}</div>
+        <div class="hint">Änderungen werden sofort gespeichert. Bereits angelegte Einschätzungen behalten ihre Fassung.</div></div>
+      <div class="set-buttons">
+        <button class="btn small" id="edBlank">Leerer Bogen</button>
+        <button class="btn small primary" id="edDone">Fertig</button>
+      </div>
+    </div>
+    ${rasterEditorHtml(t)}`;
+
+  document.getElementById('edDone').onclick = () => go(RASTER_LIST);
+  document.getElementById('edBack').onclick = () => go(RASTER_LIST);
+  document.getElementById('edBlank').onclick = () => openRasterBlankPrint(t);
+  bindRasterEditor(host, t, {
+    changed: () => save(),
+    rerender: () => { const y = window.scrollY; renderRasterEdit(); window.scrollTo(0, y); },
   });
 }
 
@@ -1028,7 +1219,7 @@ function rasterSheetHtml(o) {
     boxes.push(`<div class="rs-p-box"><h4>${g != null ? 'Bewertung' : 'Vorschlag'}</h4>
       <div class="rs-p-big">${rasterGradeLong(shown, scale)}</div>
       ${g != null && sug.points != null && sug.points !== g ? `<div>Vorschlag aus dem Raster: ${rasterGradeLong(sug.points, scale)}</div>` : ''}
-      <div class="rs-p-small">${sug.n} von ${sug.total} Kriterien eingeschätzt</div></div>`);
+      <div class="rs-p-small">${sug.n} von ${sug.total} Kriterien eingeschätzt${sug.capped ? ' · gewertet: die am besten bewerteten Kriterien bis 100 %' : ''}</div></div>`);
   }
   if (prev) {
     const pdef = prev.raster.def;
